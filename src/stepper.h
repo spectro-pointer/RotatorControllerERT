@@ -2,6 +2,12 @@
 #include <config.h>
 #include "../ERT_RF_Protocol_Interface/PacketDefinition.h"
 
+enum TRACKING_MODE {
+    STATIONARY,
+    TRACKING_BINOCULAR,
+    TRACKING_TELEMETRY
+};
+
 int32_t degToStepAzm(float deg);
 int32_t degToStepElv(float deg);
 
@@ -39,20 +45,23 @@ class solverClass {
         float speedOutput;
 
         unsigned long timeLastUpdated;
-        unsigned timeStep;
+        double timeStep;
 };
 
 class conClass {
     public:
         conClass();
         void update(PacketTrackerCmd cmd);
+        PacketTrackerCmd getLastCmd();
         controlOutput getOutput();
         controlOutput computeOutput();
+        TRACKING_MODE getMode();
         AccelStepper stepperAzm;
         AccelStepper stepperElv;
     private:
         solverClass azm;
         solverClass elv;
         controlOutput output;
+        PacketTrackerCmd lastCmd;
         int mode; 
 };

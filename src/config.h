@@ -19,4 +19,6 @@
  
 #define MIN_PULSE_WIDTH 20 // For the driver, in microseconds
 
+#define BINOC_DATA_RATE 20 // In Hz
+
 #define CMD_PORT Serial

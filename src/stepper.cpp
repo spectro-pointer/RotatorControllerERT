@@ -1,7 +1,7 @@
 #include <stepper.h>
 
 solverClass::solverClass() 
-: alpha(0), alphaPrev(0), alpha1(0), beta(0), betaPrev(0), beta1(0), beta1Prev(0), beta2(0), betaPlusOne(0), betaPlusOne1(0), lambda(0), speedOutput(0), timeLastUpdated(0), timeStep(1)
+: alpha(0), alphaPrev(0), alpha1(0), beta(0), betaPrev(0), beta1(0), beta1Prev(0), beta2(0), betaPlusOne(0), betaPlusOne1(0), lambda(0), speedOutput(0), timeLastUpdated(0), timeStep(1.0/BINOC_DATA_RATE)
 {
 
 }
@@ -16,7 +16,7 @@ void solverClass::update(float alphaIn, float beta) {
     beta1Prev = beta1;
     betaPrev = beta;
 
-    betaPlusOne = beta+timeStep*beta1+((timeStep^2)/2)*beta2;
+    betaPlusOne = beta+timeStep*beta1+((timeStep*timeStep)/2)*beta2;
     betaPlusOne1 = beta1+timeStep*beta2;
 
     lambda = 2*(betaPlusOne/timeStep)-2*(alpha/timeStep)-2*alpha1+(alpha1/2.0)+(betaPlusOne1/2.0);
@@ -63,12 +63,23 @@ conClass::conClass()
 }
 
 void conClass::update(PacketTrackerCmd cmd) {
+    lastCmd = cmd;
     azm.update(stepToDegAzm(stepperAzm.currentPosition()), cmd.azm);
     elv.update(stepToDegElv(stepperElv.currentPosition()), cmd.elv);
 }
 
 controlOutput conClass::getOutput() {
     return output;
+}
+
+PacketTrackerCmd conClass::getLastCmd() {
+    return lastCmd;
+}
+
+TRACKING_MODE conClass::getMode() {
+    TRACKING_MODE modeOut;
+    modeOut = (TRACKING_MODE)mode;
+    return modeOut;
 }
 
 int32_t degToStepAzm(float deg) {

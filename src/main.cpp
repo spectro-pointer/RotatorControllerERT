@@ -1,15 +1,14 @@
 #include <Arduino.h>
 #include <capsule.h>
 
-#include <packetInterface.h>
+#include "../ERT_RF_Protocol_Interface/PacketDefinition.h"
 #include <stepper.h>
 #include <config.h>
 
 void handleCommand(uint8_t packetId, uint8_t *dataIn, uint32_t len);
 CapsuleStatic command(handleCommand);
 
-static unsigned long lastCommandReceived = 0;
-static float commandFrequency = 1;
+static PacketTrackerCmd lastCommand;
 
 void setup() {  
   azmSetup();
@@ -30,15 +29,8 @@ void loop() {
 
 void handleCommand(uint8_t packetId, uint8_t *dataIn, uint32_t len) {
   switch(packetId) {
-    case CAPSULE_ID::MOTHER_TO_TRACKER:
-
-    commandPacket lastPosition;
-    memcpy(&lastPosition, dataIn, commandPacketSize);
-
-    double timeDelta = millis() - lastCommandReceived;
-    commandFrequency = 1000.0 / timeDelta;
-    lastCommandReceived = millis();
-
+    case CAPSULE_ID::TRACKER_CMD:
+    memcpy(&lastCommand, dataIn, packetTrackerCmdSize);
     break;
   }
 }

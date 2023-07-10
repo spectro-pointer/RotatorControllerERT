@@ -8,30 +8,29 @@
 void handleCommand(uint8_t packetId, uint8_t *dataIn, uint32_t len);
 CapsuleStatic command(handleCommand);
 
-static PacketTrackerCmd lastCommand;
+static conClass control;
 
 void setup() {  
-  azmSetup();
-  elvSetup();
   CMD_PORT.begin(115200);
 }
 
 void loop() {
-  // Change direction at the limits
-  // if (stepperAzm.distanceToGo() == 0) {
-  //   stepperAzm.moveTo(-stepperAzm.currentPosition());
-  //   stepperAzm.run();
-  // }
   while (CMD_PORT.available()) {
     command.decode(CMD_PORT.read());
   }
+  controlOutput output = control.computeOutput();
+  control.stepperAzm.setSpeed(output.azmSpeed);
+  control.stepperElv.setSpeed(output.elvSpeed);
+  control.stepperAzm.runSpeed();
+  control.stepperElv.runSpeed();
 }
 
 void handleCommand(uint8_t packetId, uint8_t *dataIn, uint32_t len) {
   switch(packetId) {
     case CAPSULE_ID::TRACKER_CMD:
+    PacketTrackerCmd lastCommand;
     memcpy(&lastCommand, dataIn, packetTrackerCmdSize);
+    control.update(lastCommand);
     break;
   }
 }
-

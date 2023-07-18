@@ -147,18 +147,12 @@ conClass::conClass()
 }
 
 void conClass::update(PacketTrackerCmd cmd) {
-    lastCmd = cmd;
     azm.update(stepToDegAzm(stepperAzm.currentPosition()), stepToDegAzm(stepperAzm.speed()), cmd.azm, AZM_MAX_SPEED_DEG, AZM_MAX_ACCEL_DEG);
     elv.update(stepToDegElv(stepperElv.currentPosition()), stepToDegElv(stepperElv.speed()), cmd.elv, ELV_MAX_SPEED_DEG, ELV_MAX_ACCEL_DEG);
-    mode = TRACKING_MODE(cmd.mode);
 }
 
 controlOutput conClass::getOutput() {
     return output;
-}
-
-PacketTrackerCmd conClass::getLastCmd() {
-    return lastCmd;
 }
 
 TRACKING_MODE conClass::getMode() {

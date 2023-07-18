@@ -4,8 +4,8 @@
 
 enum TRACKING_MODE {
     STATIONARY,
-    TRACKING_BINOCULAR,
-    TRACKING_TELEMETRY
+    TRACKING_FAST,
+    TRACKING_SLOW
 };
 
 float degToStepAzm(float deg);

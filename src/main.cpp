@@ -12,7 +12,7 @@ void loopAutomatic();
 void loopManual();
 
 static conClass control;
-PacketTrackerCmd lastBinocCmd;
+PacketTrackerCmd lastCmd;
 
 unsigned long lastCmdTime = 0;
 
@@ -70,7 +70,7 @@ void loopAutomatic() {
       control.stepperElv.stop();
       //Serial.println("Stationary");
     break;
-    case TRACKING_MODE::TRACKING_BINOCULAR:
+    case TRACKING_MODE::TRACKING_FAST:
     {
       controlOutput output = control.computeOutput();
       control.stepperAzm.setSpeed(degToStepAzm(output.azmSpeed));
@@ -79,7 +79,7 @@ void loopAutomatic() {
       control.stepperElv.runSpeed();
     }
     break;
-    case TRACKING_MODE::TRACKING_TELEMETRY:
+    case TRACKING_MODE::TRACKING_SLOW:
       //Serial.println("Telem");
       control.stepperAzm.run();
       control.stepperElv.run();
@@ -125,14 +125,30 @@ void loopManual() {
 
 void handleCommand(uint8_t packetId, uint8_t *dataIn, uint32_t len) {
   switch(packetId) {
+
+    memcpy(&lastCmd, dataIn, packetTrackerCmdSize);
+
     case CAPSULE_ID::TRACKER_CMD:
+      lastCmdTime = millis();
+      control.setMode((TRACKING_MODE)lastCmd.mode);
 
-    lastCmdTime = millis();
-
-    memcpy(&lastBinocCmd, dataIn, packetTrackerCmdSize);
-    lastBinocCmd.elv = constrain(lastBinocCmd.elv, ELV_MIN_ANGLE, ELV_MAX_ANGLE);
-    control.update(lastBinocCmd);
-
+      switch (lastCmd.mode) {
+        case TRACKING_MODE::STATIONARY: 
+          SERIAL_TO_PC.println("Received command to go stationary");
+        break;
+        case TRACKING_MODE::TRACKING_FAST:
+          memcpy(&lastCmd, dataIn, packetTrackerCmdSize);
+          lastCmd.elv = constrain(lastCmd.elv, ELV_MIN_ANGLE, ELV_MAX_ANGLE);
+          control.update(lastCmd);
+          SERIAL_TO_PC.println("Received command to go fast");
+        break;
+        case TRACKING_MODE::TRACKING_SLOW:
+          control.stepperAzm.moveTo((long)degToStepAzm(lastCmd.azm));
+          control.stepperElv.moveTo((long)degToStepElv(lastCmd.elv));
+          SERIAL_TO_PC.println("Received command to go slow");
+        break;
+      }
     break;
+
   }
 }

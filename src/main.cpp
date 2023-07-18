@@ -8,47 +8,131 @@
 void handleCommand(uint8_t packetId, uint8_t *dataIn, uint32_t len);
 CapsuleStatic command(handleCommand);
 
+void loopAutomatic();
+void loopManual();
+
 static conClass control;
+PacketTrackerCmd lastBinocCmd;
+
+unsigned long lastCmdTime = 0;
+
+float binocAzmOffset = 0;
+float binocElvOffset = 0;
+
+enum GLOBAL_MODE {
+  MANUAL,
+  AUTO
+};
+
+GLOBAL_MODE globalMode;
 
 void setup() {  
-  CMD_PORT.begin(115200);
+  CMD_PORT.begin(CMD_BAUD);
+  SERIAL_TO_PC.begin(115200);
+  globalMode = GLOBAL_MODE::MANUAL;
+
+  pinMode(VRX_PIN, INPUT);
+  pinMode(VRY_PIN, INPUT);
+  pinMode(BTN_PIN, INPUT);
+
 }
 
 void loop() {
+  switch (globalMode) {
+    case GLOBAL_MODE::AUTO:
+      loopAutomatic();
+    break;
+    case GLOBAL_MODE::MANUAL:
+      loopManual();
+    break;
+  }
+}
+
+void loopAutomatic() {
+  while(SERIAL_TO_PC.available()) {
+    char c = SERIAL_TO_PC.read();
+    if (c == 'm') {
+      globalMode = GLOBAL_MODE::MANUAL;
+      SERIAL_TO_PC.println("Switching to manual mode");
+    }
+  }
   while (CMD_PORT.available()) {
     command.decode(CMD_PORT.read());
   }
+
+  if (millis()-lastCmdTime > 2*(1000.0/BINOC_DATA_RATE)) {
+    control.setMode(TRACKING_MODE::STATIONARY);
+  }
+
   switch(control.getMode()) {
     case TRACKING_MODE::STATIONARY:
       control.stepperAzm.stop();
       control.stepperElv.stop();
+      //Serial.println("Stationary");
     break;
     case TRACKING_MODE::TRACKING_BINOCULAR:
     {
       controlOutput output = control.computeOutput();
-      control.stepperAzm.setSpeed(output.azmSpeed);
-      control.stepperElv.setSpeed(output.elvSpeed);
+      control.stepperAzm.setSpeed(degToStepAzm(output.azmSpeed));
+      control.stepperElv.setSpeed(degToStepElv(output.elvSpeed));
       control.stepperAzm.runSpeed();
       control.stepperElv.runSpeed();
     }
     break;
     case TRACKING_MODE::TRACKING_TELEMETRY:
+      //Serial.println("Telem");
       control.stepperAzm.run();
       control.stepperElv.run();
     break;
   }
 }
 
+void loopManual() {
+
+  double vrx = map(analogRead(VRX_PIN),0,634,-10,10);
+  double vry = map(analogRead(VRY_PIN),0,634,10,-10);
+  if (abs(vrx)<2) { vrx = 0; }
+  if (abs(vry)<2) { vry = 0; }
+
+  int btn = digitalRead(BTN_PIN);
+
+  static long lastButtonPressed = 0;
+
+  if (btn == BTN_PRESSED) {
+    lastButtonPressed = millis();
+    control.stepperAzm.setCurrentPosition(0);
+    control.stepperElv.setCurrentPosition(0);
+  }
+  else if ((millis() - lastButtonPressed) > 100) {
+    control.stepperAzm.setSpeed(degToStepAzm(vrx));
+    control.stepperElv.setSpeed(degToStepElv(vry));
+    control.stepperAzm.runSpeed();
+    control.stepperElv.runSpeed();
+  }
+
+  while (CMD_PORT.available()) {
+    command.decode(CMD_PORT.read());
+  }
+
+  while(SERIAL_TO_PC.available()) {
+    char c = SERIAL_TO_PC.read();
+    if (c == 'a') {
+      globalMode = GLOBAL_MODE::AUTO;
+      SERIAL_TO_PC.println("Switching to auto mode");
+    }
+  }
+}
+
 void handleCommand(uint8_t packetId, uint8_t *dataIn, uint32_t len) {
   switch(packetId) {
     case CAPSULE_ID::TRACKER_CMD:
-    PacketTrackerCmd lastCommand;
-    memcpy(&lastCommand, dataIn, packetTrackerCmdSize);
-    control.update(lastCommand);
-    if (control.getMode() == TRACKING_MODE::TRACKING_TELEMETRY) {
-      control.stepperAzm.moveTo(degToStepAzm(control.getLastCmd().azm));
-      control.stepperElv.moveTo(degToStepElv(control.getLastCmd().elv));
-    }
+
+    lastCmdTime = millis();
+
+    memcpy(&lastBinocCmd, dataIn, packetTrackerCmdSize);
+    lastBinocCmd.elv = constrain(lastBinocCmd.elv, ELV_MIN_ANGLE, ELV_MAX_ANGLE);
+    control.update(lastBinocCmd);
+
     break;
   }
 }

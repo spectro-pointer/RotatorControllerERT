@@ -1,35 +1,117 @@
 #include <stepper.h>
+#include <config.h>
 
 solverClass::solverClass() 
-: alpha(0), alphaPrev(0), alpha1(0), beta(0), betaPrev(0), beta1(0), beta1Prev(0), beta2(0), betaPlusOne(0), betaPlusOne1(0), lambda(0), speedOutput(0), timeLastUpdated(0), timeStep(1.0/BINOC_DATA_RATE)
+: alpha(0), alpha1(0), beta(0), beta1(0), beta2(0), lambda(0), speedOutput(0)
 {
 
 }
 
-void solverClass::update(float alphaIn, float beta) {
+void solverClass::update(float alphaIn, float speedIn, float lastPoint, float maxSpeed, float maxAccel) {
+
+    // Serial.print("Updating solver: ");
+
+    addNewCmdInBuffer(lastPoint);
+    timeLastUpdated = micros();
+
+    double sampleTime = 1.0/BINOC_DATA_RATE;
+
     alpha = alphaIn;
-    alpha1 = (alphaPrev-alpha)/timeStep;
-    alphaPrev = alpha;
+    alpha1 = speedIn;
 
-    beta1 = (beta-betaPrev)/timeStep;
-    beta2 = (beta1-beta1Prev)/timeStep;
-    beta1Prev = beta1;
-    betaPrev = beta;
+    beta1 = (cmdBuffer[2]-cmdBuffer[0])/(2*sampleTime);
+    beta2 = (cmdBuffer[0]-2*cmdBuffer[1]+cmdBuffer[2])/(sampleTime*sampleTime);
 
-    betaPlusOne = beta+timeStep*beta1+((timeStep*timeStep)/2)*beta2;
-    betaPlusOne1 = beta1+timeStep*beta2;
+    beta = cmdBuffer[1];
 
-    lambda = 2*(betaPlusOne/timeStep)-2*(alpha/timeStep)-2*alpha1+(alpha1/2.0)+(betaPlusOne1/2.0);
+    // Condition one, the absolute value of the speed delta must be lower than the maximum acceleration * the sample time
+
+    bool conditionOne = (abs(beta1-alpha1) < maxAccel*sampleTime);
+
+    // Condition two, the absolute value of the position delta must be lower than the distance achievable with the 
+    // optimal trajectory
+
+    double distanceToDo = abs(beta-alpha);
+
+    double tfOptimal = sampleTime;
+    double tmOptimal = 0.5*(((beta1-alpha1)/maxAccel)+tfOptimal);
+    tmOptimal = constrain(tmOptimal, sampleTime/1000.0, tfOptimal);
+
+    double lambdaOptimal1;
+    double lambdaOptimal2;
+
+    if (abs(alpha1)>abs(beta1)) {
+        lambdaOptimal1 = alpha1+tmOptimal*maxAccel;
+        lambdaOptimal2 = alpha1-tmOptimal*maxAccel;
+    }
+    else {
+        lambdaOptimal1 = beta1+(tfOptimal-tmOptimal)*maxAccel;
+        lambdaOptimal2 = beta1-(tfOptimal-tmOptimal)*maxAccel;
+    }
+
+    double distanceOptimal1 = (tmOptimal/2.0)*(alpha1+lambdaOptimal1)+((tfOptimal-tmOptimal)/2.0)*(beta1+lambdaOptimal1);
+    double distanceOptimal2 = (tmOptimal/2.0)*(alpha1+lambdaOptimal2)+((tfOptimal-tmOptimal)/2.0)*(beta1+lambdaOptimal2);
+
+    double distanceOptimal = max(abs(distanceOptimal1), abs(distanceOptimal2));
+    bool conditionTwo = (distanceToDo < distanceOptimal);
+
+    tf = sampleTime;
+
+    double goalSpeed;
+
+    // if (conditionOne and conditionTwo) {
+    //     solverMode = 0;
+    //     pointIsReachable = true;
+    //     tm = 0.5*((beta1-alpha1)/maxAccel+tf);
+    //     tm = constrain(tm, sampleTime/1000.0, tf);
+    //     lambda = 2.0*((beta-alpha)/tf)+(tm/tf)*((beta1-alpha1)/2.0)-(beta1/2.0);
+    // }
+    // else {
+        pointIsReachable = false;
+        int speedSign = ((beta-alpha)>0)-((beta-alpha)<0);
+        goalSpeed = speedSign*sqrt(maxAccel*abs(beta-alpha));
+        double speedError = goalSpeed-alpha1;
+
+        solverMode = 1;
+        accelGoal = constrain((speedError/sampleTime),-maxAccel,maxAccel);
+    // }
+    // Serial.print(map(alpha,0,360,0,1000));
+    // Serial.print(" ");
+    // Serial.print(map(beta,0,360,0,1000));
+    // Serial.print(" ");
+    // Serial.print(map(lastPoint,0,360,0,1000));
+    // Serial.print(" ");
+    // Serial.print(printMode*100.0);
+    // Serial.print(" ");
+    // Serial.print(goalSpeed*2.0);
+    // Serial.print(" ");
+    // Serial.println(alpha1*2.0);
 }
 
-float solverClass::computeSpeed() {
-    double relativeTime = (millis()-timeLastUpdated)/1000.0;
-    if (relativeTime<(timeStep/2)) {
-        speedOutput = alpha1+(relativeTime/(timeStep/2))*(lambda-alpha1);
-    } else {
-        relativeTime=relativeTime-(timeStep/2);
-        speedOutput = lambda+(relativeTime/(timeStep/2))*(betaPlusOne1-lambda);
+float solverClass::computeSpeed(double maxSpeed) {
+    double relativeTime = (micros()-timeLastUpdated)/1000000.0;
+
+    if (solverMode == 0) {
+        if (relativeTime<tm) {
+            speedOutput = alpha1+(relativeTime/tm)*(lambda-alpha1);
+        } else if (relativeTime<tf) {
+            relativeTime=relativeTime-tm;
+            if ((tf-tm)!=0) {
+            speedOutput = lambda+(relativeTime/(tf-tm))*(beta1-lambda);
+            }
+            else {
+                speedOutput = lambda;
+            }
+        }
+        else {
+            speedOutput = beta1;
+        }
     }
+    else {
+        speedOutput = alpha1+accelGoal*relativeTime;
+    }
+
+    speedOutput = constrain(speedOutput, -maxSpeed, maxSpeed);
     return speedOutput;
 }
 
@@ -37,13 +119,15 @@ float solverClass::getSpeed() {
     return speedOutput;
 }
 
-void solverClass::setTimeStep(double timeStepIn) {
-    timeStep = timeStepIn;
+void solverClass::addNewCmdInBuffer(float cmdIn) {
+    cmdBuffer[0] = cmdBuffer[1];
+    cmdBuffer[1] = cmdBuffer[2];
+    cmdBuffer[2] = cmdIn;
 }
 
 controlOutput conClass::computeOutput() {
-    output.azmSpeed = azm.computeSpeed();
-    output.elvSpeed = elv.computeSpeed();
+    output.azmSpeed = azm.computeSpeed(AZM_MAX_SPEED_DEG);
+    output.elvSpeed = elv.computeSpeed(ELV_MAX_SPEED_DEG);
     return output;
 }
 
@@ -52,20 +136,21 @@ conClass::conClass()
   stepperElv(AccelStepper::DRIVER, STEP_ELV_PIN, DIR_ELV_PIN)
 {
     stepperAzm.setMaxSpeed(AZM_MAX_SPEED);
-    stepperAzm.setAcceleration(AZM_ACCEL);
+    stepperAzm.setAcceleration(AZM_MAX_ACCEL);
     stepperAzm.setMinPulseWidth(MIN_PULSE_WIDTH);
     stepperAzm.setPinsInverted(true, false, true);
 
     stepperElv.setMaxSpeed(ELV_MAX_SPEED);
-    stepperElv.setAcceleration(ELV_ACCEL);
+    stepperElv.setAcceleration(ELV_MAX_ACCEL);
     stepperElv.setMinPulseWidth(MIN_PULSE_WIDTH);
     stepperElv.setPinsInverted(false, false, true);
 }
 
 void conClass::update(PacketTrackerCmd cmd) {
     lastCmd = cmd;
-    azm.update(stepToDegAzm(stepperAzm.currentPosition()), cmd.azm);
-    elv.update(stepToDegElv(stepperElv.currentPosition()), cmd.elv);
+    azm.update(stepToDegAzm(stepperAzm.currentPosition()), stepToDegAzm(stepperAzm.speed()), cmd.azm, AZM_MAX_SPEED_DEG, AZM_MAX_ACCEL_DEG);
+    elv.update(stepToDegElv(stepperElv.currentPosition()), stepToDegElv(stepperElv.speed()), cmd.elv, ELV_MAX_SPEED_DEG, ELV_MAX_ACCEL_DEG);
+    mode = TRACKING_MODE(cmd.mode);
 }
 
 controlOutput conClass::getOutput() {
@@ -77,23 +162,25 @@ PacketTrackerCmd conClass::getLastCmd() {
 }
 
 TRACKING_MODE conClass::getMode() {
-    TRACKING_MODE modeOut;
-    modeOut = (TRACKING_MODE)mode;
-    return modeOut;
+    return mode;
 }
 
-int32_t degToStepAzm(float deg) {
+void conClass::setMode(TRACKING_MODE modeIn) {
+    mode = modeIn;
+}
+
+float degToStepAzm(float deg) {
     return (AZM_RATIO * AZM_SPR * deg / 360);
 }
 
-float stepToDegAzm(int32_t step) {
+float stepToDegAzm(long step) {
     return (360.00 * step / (AZM_SPR * AZM_RATIO));
 }
 
-int32_t degToStepElv(float deg) {
+float degToStepElv(float deg) {
     return (ELV_RATIO * ELV_SPR * deg / 360);
 }
 
-float stepToDegElv(int32_t step) {
+float stepToDegElv(long step) {
     return (360.00 * step / (ELV_SPR * ELV_RATIO));
 }

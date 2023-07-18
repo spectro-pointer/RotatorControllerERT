@@ -8,11 +8,11 @@ enum TRACKING_MODE {
     TRACKING_TELEMETRY
 };
 
-int32_t degToStepAzm(float deg);
-int32_t degToStepElv(float deg);
+float degToStepAzm(float deg);
+float degToStepElv(float deg);
 
-float stepToDegAzm(int32_t step);
-float stepToDegElv(int32_t step);
+float stepToDegAzm(long step);
+float stepToDegElv(long step);
 
 struct controlOutput {
     float azmSpeed;
@@ -22,30 +22,32 @@ struct controlOutput {
 class solverClass {
     public:
         solverClass();
-        void update(float alpha, float beta);
-        float computeSpeed();
+        void update(float alpha, float speed, float newPoint, float maxSpeed, float maxAccel);
+        float computeSpeed(double maxSpeed);
         float getSpeed();
-        void setTimeStep(double timeStepIn);
+        void addNewCmdInBuffer(float cmd);
     private: 
         float alpha;
-        float alphaPrev;
         float alpha1;
 
         float beta;
-        float betaPrev;
         float beta1;
-        float beta1Prev;
         float beta2; 
-
-        float betaPlusOne;
-        float betaPlusOne1;
 
         float lambda;
 
         float speedOutput;
 
-        unsigned long timeLastUpdated;
-        double timeStep;
+        unsigned long long timeLastUpdated;
+        double tm;
+        double tf;
+
+        bool pointIsReachable;
+
+        float cmdBuffer[3];
+
+        int solverMode;
+        double accelGoal;
 };
 
 class conClass {
@@ -56,6 +58,7 @@ class conClass {
         controlOutput getOutput();
         controlOutput computeOutput();
         TRACKING_MODE getMode();
+        void setMode(TRACKING_MODE mode);
         AccelStepper stepperAzm;
         AccelStepper stepperElv;
     private:
@@ -63,5 +66,5 @@ class conClass {
         solverClass elv;
         controlOutput output;
         PacketTrackerCmd lastCmd;
-        int mode; 
+        TRACKING_MODE mode; 
 };

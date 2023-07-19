@@ -24,40 +24,40 @@ void solverClass::update(float alphaIn, float speedIn, float lastPoint, float ma
 
     beta = cmdBuffer[1];
 
-    // // Condition one, the absolute value of the speed delta must be lower than the maximum acceleration * the sample time
+    // Condition one, the absolute value of the speed delta must be lower than the maximum acceleration * the sample time
 
-    // bool conditionOne = (abs(beta1-alpha1) < maxAccel*sampleTime);
+    bool conditionOne = (abs(beta1-alpha1) < maxAccel*sampleTime);
 
-    // // Condition two, the absolute value of the position delta must be lower than the distance achievable with the 
-    // // optimal trajectory
+    // Condition two, the absolute value of the position delta must be lower than the distance achievable with the 
+    // optimal trajectory
 
-    // double distanceToDo = abs(beta-alpha);
+    double distanceToDo = abs(beta-alpha);
 
-    // double tfOptimal = sampleTime;
-    // double tmOptimal = 0.5*(((beta1-alpha1)/maxAccel)+tfOptimal);
-    // tmOptimal = constrain(tmOptimal, sampleTime/1000.0, tfOptimal);
+    double tfOptimal = sampleTime;
+    double tmOptimal = 0.5*(((beta1-alpha1)/maxAccel)+tfOptimal);
+    tmOptimal = constrain(tmOptimal, sampleTime/1000.0, tfOptimal);
 
-    // double lambdaOptimal1;
-    // double lambdaOptimal2;
+    double lambdaOptimal1;
+    double lambdaOptimal2;
 
-    // if (abs(alpha1)>abs(beta1)) {
-    //     lambdaOptimal1 = alpha1+tmOptimal*maxAccel;
-    //     lambdaOptimal2 = alpha1-tmOptimal*maxAccel;
-    // }
-    // else {
-    //     lambdaOptimal1 = beta1+(tfOptimal-tmOptimal)*maxAccel;
-    //     lambdaOptimal2 = beta1-(tfOptimal-tmOptimal)*maxAccel;
-    // }
+    if (abs(alpha1)>abs(beta1)) {
+        lambdaOptimal1 = alpha1+tmOptimal*maxAccel;
+        lambdaOptimal2 = alpha1-tmOptimal*maxAccel;
+    }
+    else {
+        lambdaOptimal1 = beta1+(tfOptimal-tmOptimal)*maxAccel;
+        lambdaOptimal2 = beta1-(tfOptimal-tmOptimal)*maxAccel;
+    }
 
-    // double distanceOptimal1 = (tmOptimal/2.0)*(alpha1+lambdaOptimal1)+((tfOptimal-tmOptimal)/2.0)*(beta1+lambdaOptimal1);
-    // double distanceOptimal2 = (tmOptimal/2.0)*(alpha1+lambdaOptimal2)+((tfOptimal-tmOptimal)/2.0)*(beta1+lambdaOptimal2);
+    double distanceOptimal1 = (tmOptimal/2.0)*(alpha1+lambdaOptimal1)+((tfOptimal-tmOptimal)/2.0)*(beta1+lambdaOptimal1);
+    double distanceOptimal2 = (tmOptimal/2.0)*(alpha1+lambdaOptimal2)+((tfOptimal-tmOptimal)/2.0)*(beta1+lambdaOptimal2);
 
-    // double distanceOptimal = max(abs(distanceOptimal1), abs(distanceOptimal2));
-    // bool conditionTwo = (distanceToDo < distanceOptimal);
+    double distanceOptimal = max(abs(distanceOptimal1), abs(distanceOptimal2));
+    bool conditionTwo = (distanceToDo < distanceOptimal);
 
-    //tf = sampleTime;
+    tf = sampleTime;
 
-    //double goalSpeed;
+    double goalSpeed;
 
     // if (conditionOne and conditionTwo) {
     //     solverMode = 0;
@@ -67,13 +67,13 @@ void solverClass::update(float alphaIn, float speedIn, float lastPoint, float ma
     //     lambda = 2.0*((beta-alpha)/tf)+(tm/tf)*((beta1-alpha1)/2.0)-(beta1/2.0);
     // }
     // else {
-        //pointIsReachable = false;
-        // int speedSign = ((beta-alpha)>0)-((beta-alpha)<0);
-        // double goalSpeed = speedSign*sqrt(maxAccel*abs(beta-alpha));
-        // double speedError = goalSpeed-alpha1;
+        pointIsReachable = false;
+        int speedSign = ((beta-alpha)>0)-((beta-alpha)<0);
+        goalSpeed = speedSign*sqrt(maxAccel*abs(beta-alpha));
+        double speedError = goalSpeed-alpha1;
 
-        // solverMode = 1;
-        // accelGoal = constrain((speedError/sampleTime),-maxAccel,maxAccel);
+        solverMode = 1;
+        accelGoal = constrain((speedError/sampleTime),-maxAccel,maxAccel);
     // }
     // Serial.print(map(alpha,0,360,0,1000));
     // Serial.print(" ");
@@ -88,39 +88,28 @@ void solverClass::update(float alphaIn, float speedIn, float lastPoint, float ma
     // Serial.println(alpha1*2.0);
 }
 
-float solverClass::computeSpeed(double position, double goal, double maxSpeed, double maxAccel) {
-    // double relativeTime = (micros()-timeLastUpdated)/1000000.0;
+float solverClass::computeSpeed(double maxSpeed) {
+    double relativeTime = (micros()-timeLastUpdated)/1000000.0;
 
-    // if (solverMode == 0) {
-    //     if (relativeTime<tm) {
-    //         speedOutput = alpha1+(relativeTime/tm)*(lambda-alpha1);
-    //     } else if (relativeTime<tf) {
-    //         relativeTime=relativeTime-tm;
-    //         if ((tf-tm)!=0) {
-    //         speedOutput = lambda+(relativeTime/(tf-tm))*(beta1-lambda);
-    //         }
-    //         else {
-    //             speedOutput = lambda;
-    //         }
-    //     }
-    //     else {
-    //         speedOutput = beta1;
-    //     }
-    // }
-    // else {
-    //     speedOutput = alpha1+accelGoal*relativeTime;
-    // }
-
-    static long long lastTimeSpeedComputed = micros();
-
-    int speedSign = ((beta-position)>0)-((beta-position)<0);
-    double goalSpeed = speedSign*sqrt(maxAccel*abs(beta-position));
-    double speedError = goalSpeed-speedOutput;
-
-    //solverMode = 1;
-    accelGoal = constrain((speedError/sampleTime),-maxAccel,maxAccel);
-
-    speedOutput = speedOutput + accelGoal*(micros()-lastTimeSpeedComputed)/1000000.0;
+    if (solverMode == 0) {
+        if (relativeTime<tm) {
+            speedOutput = alpha1+(relativeTime/tm)*(lambda-alpha1);
+        } else if (relativeTime<tf) {
+            relativeTime=relativeTime-tm;
+            if ((tf-tm)!=0) {
+            speedOutput = lambda+(relativeTime/(tf-tm))*(beta1-lambda);
+            }
+            else {
+                speedOutput = lambda;
+            }
+        }
+        else {
+            speedOutput = beta1;
+        }
+    }
+    else {
+        speedOutput = alpha1+accelGoal*relativeTime;
+    }
 
     speedOutput = constrain(speedOutput, -maxSpeed, maxSpeed);
     return speedOutput;
@@ -137,7 +126,7 @@ void solverClass::addNewCmdInBuffer(float cmdIn) {
 }
 
 controlOutput conClass::computeOutput() {
-    output.azmSpeed = azm.computeSpeed(stepToDegAzm(stepperAzm.currentPosition()),stepToDegAzm(stepperAzm.get),AZM_MAX_SPEED_DEG);
+    output.azmSpeed = azm.computeSpeed(AZM_MAX_SPEED_DEG);
     output.elvSpeed = elv.computeSpeed(ELV_MAX_SPEED_DEG);
     return output;
 }

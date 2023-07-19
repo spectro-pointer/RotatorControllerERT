@@ -23,7 +23,7 @@ class solverClass {
     public:
         solverClass();
         void update(float alpha, float speed, float newPoint, float maxSpeed, float maxAccel);
-        float computeSpeed(double position, double goal, double maxSpeed, double maxAccel)
+        float computeSpeed(double maxSpeed);
         float getSpeed();
         void addNewCmdInBuffer(float cmd);
     private: 

@@ -127,11 +127,6 @@ void handleCommand(uint8_t packetId, uint8_t *dataIn, uint32_t len) {
 
   memcpy(&lastCmd, dataIn, packetTrackerCmdSize);
 
-  static long lastCmdTimeLast;
-
-  Serial.println(millis()-lastCmdTimeLast);
-  lastCmdTimeLast = millis();
-
   // Serial.print("Received command: ");
   // Serial.print(lastCmd.mode);
   // Serial.print(" ");

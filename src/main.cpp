@@ -124,28 +124,34 @@ void loopManual() {
 }
 
 void handleCommand(uint8_t packetId, uint8_t *dataIn, uint32_t len) {
+
+  memcpy(&lastCmd, dataIn, packetTrackerCmdSize);
+
+  // Serial.print("Received command: ");
+  // Serial.print(lastCmd.mode);
+  // Serial.print(" ");
+  // Serial.print(lastCmd.azm);
+  // Serial.print(" ");
+  // Serial.println(lastCmd.elv);
+
   switch(packetId) {
-
-    memcpy(&lastCmd, dataIn, packetTrackerCmdSize);
-
     case CAPSULE_ID::TRACKER_CMD:
       lastCmdTime = millis();
       control.setMode((TRACKING_MODE)lastCmd.mode);
 
       switch (lastCmd.mode) {
         case TRACKING_MODE::STATIONARY: 
-          SERIAL_TO_PC.println("Received command to go stationary");
+          //SERIAL_TO_PC.println("Received command to go stationary");
         break;
         case TRACKING_MODE::TRACKING_FAST:
-          memcpy(&lastCmd, dataIn, packetTrackerCmdSize);
           lastCmd.elv = constrain(lastCmd.elv, ELV_MIN_ANGLE, ELV_MAX_ANGLE);
           control.update(lastCmd);
-          SERIAL_TO_PC.println("Received command to go fast");
+          //SERIAL_TO_PC.println("Received command to go fast");
         break;
         case TRACKING_MODE::TRACKING_SLOW:
           control.stepperAzm.moveTo((long)degToStepAzm(lastCmd.azm));
           control.stepperElv.moveTo((long)degToStepElv(lastCmd.elv));
-          SERIAL_TO_PC.println("Received command to go slow");
+          //SERIAL_TO_PC.println("Received command to go slow");
         break;
       }
     break;

@@ -10,9 +10,7 @@ solverClass::solverClass()
 void solverClass::update(float alphaIn, float speedIn, float lastPoint, float maxSpeed, float maxAccel) {
 
     // Serial.print("Updating solver: ");
-
     addNewCmdInBuffer(lastPoint);
-    timeLastUpdated = micros();
 
     double sampleTime = 1.0/BINOC_DATA_RATE;
 
@@ -59,14 +57,14 @@ void solverClass::update(float alphaIn, float speedIn, float lastPoint, float ma
 
     double goalSpeed;
 
-    // if (conditionOne and conditionTwo) {
-    //     solverMode = 0;
-    //     pointIsReachable = true;
-    //     tm = 0.5*((beta1-alpha1)/maxAccel+tf);
-    //     tm = constrain(tm, sampleTime/1000.0, tf);
-    //     lambda = 2.0*((beta-alpha)/tf)+(tm/tf)*((beta1-alpha1)/2.0)-(beta1/2.0);
-    // }
-    // else {
+    if (conditionOne and conditionTwo) {
+        solverMode = 0;
+        pointIsReachable = true;
+        tm = 0.5*((beta1-alpha1)/maxAccel+tf);
+        tm = constrain(tm, sampleTime/1000.0, tf);
+        lambda = 2.0*((beta-alpha)/tf)+(tm/tf)*((beta1-alpha1)/2.0)-(beta1/2.0);
+    }
+    else {
         pointIsReachable = false;
         int speedSign = ((beta-alpha)>0)-((beta-alpha)<0);
         goalSpeed = speedSign*sqrt(maxAccel*abs(beta-alpha));
@@ -74,18 +72,22 @@ void solverClass::update(float alphaIn, float speedIn, float lastPoint, float ma
 
         solverMode = 1;
         accelGoal = constrain((speedError/sampleTime),-maxAccel,maxAccel);
-    // }
+    }
     // Serial.print(map(alpha,0,360,0,1000));
     // Serial.print(" ");
     // Serial.print(map(beta,0,360,0,1000));
     // Serial.print(" ");
     // Serial.print(map(lastPoint,0,360,0,1000));
     // Serial.print(" ");
-    // Serial.print(printMode*100.0);
+    // Serial.print(solverMode*100.0);
     // Serial.print(" ");
     // Serial.print(goalSpeed*2.0);
     // Serial.print(" ");
     // Serial.println(alpha1*2.0);
+    //Serial.print(" ");
+    //Serial.println((micros()-timeLastUpdated)/20.0);
+
+    timeLastUpdated = micros();
 }
 
 float solverClass::computeSpeed(double maxSpeed) {
@@ -110,7 +112,6 @@ float solverClass::computeSpeed(double maxSpeed) {
     else {
         speedOutput = alpha1+accelGoal*relativeTime;
     }
-
     speedOutput = constrain(speedOutput, -maxSpeed, maxSpeed);
     return speedOutput;
 }

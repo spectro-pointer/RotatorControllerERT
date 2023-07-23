@@ -10,8 +10,8 @@
 #define BTN_PIN   A4
 #define BTN_PRESSED 0
 
-#define AZM_SPR 800 // Consider microstep
-#define ELV_SPR 800 // Consider microstep
+#define AZM_SPR 3200 // Consider microstep
+#define ELV_SPR 3200 // Consider microstep
 
 #define AZM_RATIO 30 // Gear ratio between stepper and tracker head
 #define ELV_RATIO 30 // Gear ratio between stepper and tracker head
@@ -19,11 +19,11 @@
 #define ELV_MAX_ANGLE 100.0
 #define ELV_MIN_ANGLE -10.0
 
-#define AZM_MAX_SPEED 7500 // In steps per second 3000
-#define ELV_MAX_SPEED 7500 // In steps per second 3000
+#define AZM_MAX_SPEED 75000 // In steps per second 3000
+#define ELV_MAX_SPEED 100000 // In steps per second 3000
 
-#define AZM_MAX_ACCEL 20000 // In steps per second per second 25000 
-#define ELV_MAX_ACCEL 20000 // In steps per second per second 25000
+#define AZM_MAX_ACCEL 50000 // In steps per second per second 25000 
+#define ELV_MAX_ACCEL 75000 // In steps per second per second 25000
 
 #define AZM_MAX_ACCEL_DEG AZM_MAX_ACCEL * 360.00 / (AZM_SPR * AZM_RATIO) // In deg per second per second
 #define ELV_MAX_ACCEL_DEG ELV_MAX_ACCEL * 360.00 / (ELV_SPR * ELV_RATIO) // In deg per second per second

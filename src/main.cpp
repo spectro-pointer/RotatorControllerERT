@@ -115,6 +115,30 @@ void loopManual() {
     control.stepperElv.runSpeed();
   }
 
+  // static long lastMoveDone = millis();
+  // static bool up = true;
+
+  // if (millis()-lastMoveDone > (10*1000.0)) {
+  //   lastMoveDone = millis();
+  //   if (up) {
+  //     control.stepperAzm.setMaxSpeed(AZM_MAX_SPEED);
+  //     control.stepperAzm.setAcceleration(AZM_MAX_ACCEL);
+  //     control.stepperAzm.moveTo((long)degToStepAzm(90));
+  //     control.stepperElv.moveTo((long)degToStepElv(0));
+  //     up = false;
+  //   }
+  //   else {
+  //     control.stepperAzm.setMaxSpeed(AZM_MAX_SPEED/10.0);
+  //     control.stepperAzm.setAcceleration(AZM_MAX_ACCEL/10.0);
+  //     control.stepperAzm.moveTo((long)degToStepAzm(0));
+  //     control.stepperElv.moveTo((long)degToStepElv(0));
+  //     up = true;
+  //   }
+  // }
+
+  // control.stepperAzm.run();
+  // control.stepperElv.run();
+
   // while (CMD_PORT.available()) {
   //   command.decode(CMD_PORT.read());
   // }

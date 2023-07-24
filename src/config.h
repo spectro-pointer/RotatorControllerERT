@@ -19,11 +19,11 @@
 #define ELV_MAX_ANGLE 100.0
 #define ELV_MIN_ANGLE -10.0
 
-#define AZM_MAX_SPEED 75000 // In steps per second 3000
-#define ELV_MAX_SPEED 100000 // In steps per second 3000
+#define AZM_MAX_SPEED 5000 // In steps per second 75000
+#define ELV_MAX_SPEED 5000 // In steps per second 100000
 
-#define AZM_MAX_ACCEL 50000 // In steps per second per second 25000 
-#define ELV_MAX_ACCEL 75000 // In steps per second per second 25000
+#define AZM_MAX_ACCEL 25000 // In steps per second per second 25000 
+#define ELV_MAX_ACCEL 25000 // In steps per second per second 25000
 
 #define AZM_MAX_ACCEL_DEG AZM_MAX_ACCEL * 360.00 / (AZM_SPR * AZM_RATIO) // In deg per second per second
 #define ELV_MAX_ACCEL_DEG ELV_MAX_ACCEL * 360.00 / (ELV_SPR * ELV_RATIO) // In deg per second per second
@@ -31,7 +31,7 @@
 #define AZM_MAX_SPEED_DEG AZM_MAX_SPEED * 360.00 / (AZM_SPR * AZM_RATIO) // In deg per second
 #define ELV_MAX_SPEED_DEG ELV_MAX_SPEED * 360.00 / (ELV_SPR * ELV_RATIO) // In deg per second
  
-#define MIN_PULSE_WIDTH 5 // For the driver, in microseconds
+#define MIN_PULSE_WIDTH 20 // For the driver, in microseconds
 #define BINOC_DATA_RATE 100 // In Hz
 
 #define CMD_PORT Serial5

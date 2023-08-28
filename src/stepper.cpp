@@ -1,8 +1,8 @@
 #include <stepper.h>
 #include <config.h>
 
-solverClass::solverClass() 
-: alpha(0), alpha1(0), beta(0), beta1(0), beta2(0), lambda(0), speedOutput(0)
+solverClass::solverClass(bool accLimitInput) 
+: alpha(0), alpha1(0), beta(0), beta1(0), beta2(0), lambda(0), speedOutput(0), accLimit(accLimitInput)
 {
 
 }
@@ -57,14 +57,14 @@ void solverClass::update(float alphaIn, float speedIn, float lastPoint, float ma
 
     double goalSpeed;
 
-    if (conditionOne and conditionTwo) {
+    if ((conditionOne and conditionTwo) or !accLimit) {
         solverMode = 0;
         pointIsReachable = true;
         tm = 0.5*((beta1-alpha1)/maxAccel+tf);
         tm = constrain(tm, sampleTime/1000.0, tf);
         lambda = 2.0*((beta-alpha)/tf)+(tm/tf)*((beta1-alpha1)/2.0)-(beta1/2.0);
     }
-    else {
+    else if (accLimit) {
         pointIsReachable = false;
         int speedSign = ((beta-alpha)>0)-((beta-alpha)<0);
         goalSpeed = speedSign*sqrt(maxAccel*abs(beta-alpha));
@@ -134,17 +134,18 @@ controlOutput conClass::computeOutput() {
 
 conClass::conClass()
 : stepperAzm(AccelStepper::DRIVER, STEP_AZM_PIN, DIR_AZM_PIN), 
-  stepperElv(AccelStepper::DRIVER, STEP_ELV_PIN, DIR_ELV_PIN)
+  stepperElv(AccelStepper::DRIVER, STEP_ELV_PIN, DIR_ELV_PIN),
+  azm(AZM_ACC_LIMIT), elv(ELV_ACC_LIMIT)
 {
     stepperAzm.setMaxSpeed(AZM_MAX_SPEED);
     stepperAzm.setAcceleration(AZM_MAX_ACCEL);
     stepperAzm.setMinPulseWidth(MIN_PULSE_WIDTH);
-    stepperAzm.setPinsInverted(true, false, true);
+    stepperAzm.setPinsInverted(AZM_INVERT_DIR, false, true);
 
     stepperElv.setMaxSpeed(ELV_MAX_SPEED);
     stepperElv.setAcceleration(ELV_MAX_ACCEL);
     stepperElv.setMinPulseWidth(MIN_PULSE_WIDTH);
-    stepperElv.setPinsInverted(false, false, true);
+    stepperElv.setPinsInverted(ELV_INVERT_DIR, false, true);
 }
 
 void conClass::update(PacketTrackerCmd cmd) {
@@ -179,3 +180,15 @@ float degToStepElv(float deg) {
 float stepToDegElv(long step) {
     return (360.00 * step / (ELV_SPR * ELV_RATIO));
 }
+
+double getAngleStepper(double angle1, double angle2) {
+    double angle = angle2 - angle1;
+    if (angle > 180) {
+        angle -= 360;
+    }
+    if (angle < -180) {
+        angle += 360;
+    }
+    return angle;
+}
+

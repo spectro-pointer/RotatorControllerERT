@@ -1,11 +1,11 @@
 #include <AccelStepper.h>
 #include <config.h>
-#include "../ERT_RF_Protocol_Interface/PacketDefinition.h"
+#include "comm.h"
 
 enum TRACKING_MODE {
     STATIONARY,
-    TRACKING_FAST,
-    TRACKING_SLOW
+    TRACKING_SMOOTH,
+    TRACKING_STEP
 };
 
 float degToStepAzm(float deg);
@@ -21,7 +21,7 @@ struct controlOutput {
 
 class solverClass {
     public:
-        solverClass();
+        solverClass(bool accLimitInput);
         void update(float alpha, float speed, float newPoint, float maxSpeed, float maxAccel);
         float computeSpeed(double maxSpeed);
         float getSpeed();
@@ -48,6 +48,7 @@ class solverClass {
 
         int solverMode;
         double accelGoal;
+        bool accLimit;
 };
 
 class conClass {
@@ -68,3 +69,5 @@ class conClass {
         PacketTrackerCmd lastCmd;
         TRACKING_MODE mode; 
 };
+
+double getAngleStepper(double angle1, double angle2);

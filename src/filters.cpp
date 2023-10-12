@@ -44,7 +44,6 @@ void SecondOrderLowPassFilter::setCutoffFreq(double cutoffFreq) {
 }
 
 
-
 SecondOrderEstimator::SecondOrderEstimator() {
     xPrev = xPrevTime = xPrev2 = xPrev2Time = sampleCount = 0.0;
 }

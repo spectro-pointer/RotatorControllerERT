@@ -236,6 +236,17 @@ void handleCommand(uint8_t packetId, uint8_t *dataIn, uint32_t len) {
 
     static PacketTrackerCmd lastCmdPrev;
 
+    // Serial.print("Received command");
+    // Serial.print(" ");
+    // Serial.print(lastCmd.azm);
+    // Serial.print(" ");
+    // Serial.print(lastCmd.elv);
+    // Serial.print(" "); 
+    // Serial.print(lastCmd.timeStamp);
+    // Serial.print(" ");
+    // Serial.println(lastCmd.mode);
+
+
     if (abs(getAngleStepper(lastCmdPrev.azm, lastCmd.azm))>20.00 or abs(getAngleStepper(lastCmdPrev.elv, lastCmd.elv))>20.00) {
       control.setMode(TRACKING_MODE::STATIONARY);
       lastCmdPrev = lastCmd;
@@ -252,8 +263,9 @@ void handleCommand(uint8_t packetId, uint8_t *dataIn, uint32_t len) {
       case TRACKING_MODE::STATIONARY: 
       break;
       case TRACKING_MODE::TRACKING_SMOOTH:
-        azmEstimator.update(lastCmd.azm,millis()-lastCmd.timeStamp);
-        elvEstimator.update(lastCmd.elv,millis()-lastCmd.timeStamp);
+        // .println(lastSerialCmd.timeStamp);
+        azmEstimator.update(lastCmd.azm,millis());
+        elvEstimator.update(lastCmd.elv,millis());
         azmEstimator.setMaxTimeWindow(lastCmd.maxTimeWindow);
         elvEstimator.setMaxTimeWindow(lastCmd.maxTimeWindow);
         // static unsigned lastTime = lastCmd.timeStamp;

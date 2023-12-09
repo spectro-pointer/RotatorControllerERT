@@ -2,17 +2,62 @@
 #include <config.h>
 #include "comm.h"
 
-enum TRACKING_MODE {
-    STATIONARY,
-    TRACKING_SMOOTH,
-    TRACKING_STEP
+#include <NativeEthernet.h>
+#include <NativeEthernetUdp.h>
+
+struct ControlParameter {
+  double P;
+  double cutOffFreq;
+  double maxTimeWindow;
 };
 
-float degToStepAzm(float deg);
-float degToStepElv(float deg);
+struct AxisParemeter {
+  double maxAcceleration;
+  double maxSpeed;
+};
 
-float stepToDegAzm(long step);
-float stepToDegElv(long step);
+struct SystemParemter {
+  IPAddress ip;
+  int port;
+};
+
+struct TrackerParameter {
+  AxisParemeter azmParameter;
+  AxisParemeter elvParameter;
+  SystemParemter ethernetParameter;
+  ControlParameter control;
+};
+
+struct CameraErrorPacket {
+  int32_t Cx;
+  int32_t Cy;
+  int32_t Tx;
+  int32_t Ty;
+  bool isVisible;
+}; 
+
+struct PositionPacket {
+  double azm;
+  double elv;
+};
+
+struct PointerPacket {
+  double azm;
+  double elv;
+  bool isPressed;
+};
+
+enum TRACKING_MODE {
+    STATIONARY,
+    TRACKING_POSITION,
+    TRACKING_ERROR
+};
+
+long degToStepAzm(double deg);
+long degToStepElv(double deg);
+
+double stepToDegAzm(long step);
+double stepToDegElv(long step);
 
 struct controlOutput {
     float azmSpeed;
@@ -56,17 +101,22 @@ class conClass {
         conClass();
         void update(PacketTrackerCmd cmd);
         PacketTrackerCmd getLastCmd();
-        controlOutput getOutput();
-        controlOutput computeOutput();
+        controlOutput getOutputSpeedPosition();
+        controlOutput computeOutputSpeedPosition();
         TRACKING_MODE getMode();
         void setMode(TRACKING_MODE mode);
         AccelStepper stepperAzm;
         AccelStepper stepperElv;
+
+        CameraErrorPacket   lastCameraError;
+        PositionPacket      lastPosition;
+        PointerPacket       lastPointer;
+
+        controlOutput outputSpeedPosition;
+        controlOutput outputSpeedError;
     private:
         solverClass azm;
         solverClass elv;
-        controlOutput output;
-        PacketTrackerCmd lastCmd;
         TRACKING_MODE mode; 
 };
 

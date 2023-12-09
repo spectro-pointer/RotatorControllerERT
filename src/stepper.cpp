@@ -126,10 +126,10 @@ void solverClass::addNewCmdInBuffer(float cmdIn) {
     cmdBuffer[2] = cmdIn;
 }
 
-controlOutput conClass::computeOutput() {
-    output.azmSpeed = azm.computeSpeed(AZM_MAX_SPEED_DEG);
-    output.elvSpeed = elv.computeSpeed(ELV_MAX_SPEED_DEG);
-    return output;
+controlOutput conClass::computeOutputSpeedPosition() {
+    outputSpeedPosition.azmSpeed = azm.computeSpeed(AZM_MAX_SPEED_DEG);
+    outputSpeedPosition.elvSpeed = elv.computeSpeed(ELV_MAX_SPEED_DEG);
+    return outputSpeedPosition;
 }
 
 conClass::conClass()
@@ -153,8 +153,8 @@ void conClass::update(PacketTrackerCmd cmd) {
     elv.update(stepToDegElv(stepperElv.currentPosition()), stepToDegElv(stepperElv.speed()), cmd.elv, ELV_MAX_SPEED_DEG, ELV_MAX_ACCEL_DEG);
 }
 
-controlOutput conClass::getOutput() {
-    return output;
+controlOutput conClass::getOutputSpeedPosition() {
+    return outputSpeedPosition;
 }
 
 TRACKING_MODE conClass::getMode() {
@@ -165,19 +165,19 @@ void conClass::setMode(TRACKING_MODE modeIn) {
     mode = modeIn;
 }
 
-float degToStepAzm(float deg) {
+long  degToStepAzm(double deg) {
     return (AZM_RATIO * AZM_SPR * deg / 360);
 }
 
-float stepToDegAzm(long step) {
+double stepToDegAzm(long step) {
     return (360.00 * step / (AZM_SPR * AZM_RATIO));
 }
 
-float degToStepElv(float deg) {
+long  degToStepElv(double deg) {
     return (ELV_RATIO * ELV_SPR * deg / 360);
 }
 
-float stepToDegElv(long step) {
+double stepToDegElv(long step) {
     return (360.00 * step / (ELV_SPR * ELV_RATIO));
 }
 

@@ -4,9 +4,15 @@
 #include "stepper.h"
 #include "config.h"
 #include "filters.h"
+#include <SD.h>
 
-Bounce endstopAzm = Bounce();
-Bounce endstopElv = Bounce();
+// MAC address for Teensy 1
+byte mac[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED};
+IPAddress ip(192, 168, 1, 100); // IP address for Teensy 1
+unsigned int localPort = 8888; // Local port to listen on
+
+EthernetUDP udp;
+EthernetServer server(80);
 
 void handleCommand(uint8_t packetId, uint8_t *dataIn, uint32_t len);
 CapsuleStatic command(handleCommand);
@@ -15,8 +21,6 @@ void loopAutomatic();
 void loopManual();
 
 static conClass control;
-PacketTrackerCmd lastCmd;
-
 unsigned long lastCmdTime = 0;
 
 double internalAzmNorthEstimate = 0;
@@ -31,64 +35,84 @@ SecondOrderLowPassFilter elvFilter(0.1, 100);
 void doHoming();
 void printPosition();
 
+static TrackerParameter globalParameter;
+
+static float speed = 0.0;
+static float position = 0.0;
+static float acceleration = 0.0;
+
+String readHTML();
+void readConfigFile();
+void saveConfigFile();
+void setupWebserver();
+void loopWebserver();
+
 void setup() {  
+
   CMD_PORT.begin(CMD_BAUD);
   SERIAL_TO_PC.begin(115200);
+  Serial3.begin(115200);
 
-  pinMode(VRX_PIN, INPUT);
-  pinMode(VRY_PIN, INPUT);
-  pinMode(BTN_PIN, INPUT_PULLUP);
+  pinMode(LED_BUILTIN, OUTPUT);
+  pinMode(AZM_ENCODER_PIN, INPUT);
 
   doHoming();
+
+  Ethernet.begin(mac, ip);
+  udp.begin(localPort);
+  server.begin();
+
+  // Initialize SD card
+  if (!SD.begin(BUILTIN_SDCARD)) {
+    // Serial.println("Error initializing SD card");
+    while (1);
+  }
+
+  // Read parameters from config file
+  readConfigFile();
 }
 
 void loop() {
   loopAutomatic();
   printPosition();
+  loopWebserver();
 }
 
 void loopAutomatic() {
 
-  while (CMD_PORT.available()) {
-    command.decode(CMD_PORT.read());
+  double speedAzm = 0;
+  double speedElv = 0;
+
+  int packetSize = udp.parsePacket();
+  if (packetSize) {
+    for (int i = 0; i < packetSize; i++) {
+      command.decode(udp.read());
+    }
   }
 
   static TRACKING_MODE lastMode = TRACKING_MODE::STATIONARY;
 
   if (lastMode != control.getMode()) {
     lastMode = control.getMode();
-    if (control.getMode() == TRACKING_MODE::TRACKING_SMOOTH) {
-        azmEstimator.reset(lastCmd.azm);
-        elvEstimator.reset(lastCmd.elv);
+    if (control.getMode() == TRACKING_MODE::TRACKING_POSITION) {
+        azmEstimator.reset(control.lastPosition.azm);
+        elvEstimator.reset(control.lastPosition.elv);
     }
   }
 
   switch(control.getMode()) {
+
     case TRACKING_MODE::STATIONARY:
-      loopManual();
       azmEstimator.reset();
       elvEstimator.reset();
     break;
-    case TRACKING_MODE::TRACKING_SMOOTH:
+    case TRACKING_MODE::TRACKING_POSITION:
     {
       static unsigned long lastEstimationTime = millis();
       if ((millis()-lastEstimationTime) >= 1000.0/ESTIMATION_RATE) {
-        //int btn = digitalRead(BTN_PIN);
-
-        //double vrx;
-        //double vry;
-
-        // if (btn == BTN_PRESSED) {
-          double vrx = map(analogRead(VRX_PIN),0,1024,-1000.0,1000.0);
-          double vry = map(analogRead(VRY_PIN),0,1024,1000.0,-1000.0);
-
-          if (abs(vrx)<100) { vrx = 0; }
-          if (abs(vry)<100) { vry = 0; } 
-        // }
-        // else {
-        //   vrx = 0;
-        //   vry = 0;
-        // }
+  
+        double vrx = 0;
+        double vry = 0;
 
         internalAzmNorthEstimate -= (vrx/500.0)/ESTIMATION_RATE;
         internalElvHorizonEstimate -= (vry/500.0)/ESTIMATION_RATE;
@@ -106,16 +130,6 @@ void loopAutomatic() {
         double azmFiltered = azmFilter.process(internalAzmValue);
         double elvFiltered = elvFilter.process(internalElvValue);
 
-        // Serial.print(lastCmd.azm);
-        // Serial.print(" ");
-        // Serial.println(azmEstimation);
-        // Serial.print(" ");
-        // Serial.println(azmFiltered);
-        // Serial.print(" ");
-        // Serial.print(internalAzmNorthEstimate);
-        // Serial.print(" ");
-        // Serial.println(internalAzmValue);
-
         PacketTrackerCmd newCmd;
 
         newCmd.azm = azmFiltered;
@@ -126,96 +140,43 @@ void loopAutomatic() {
 
         control.update(newCmd);
       }
-      controlOutput output = control.computeOutput();
-      control.stepperAzm.setSpeed(degToStepAzm(output.azmSpeed));
-      control.stepperElv.setSpeed(degToStepElv(output.elvSpeed));
-      control.stepperAzm.runSpeed();
-      control.stepperElv.runSpeed();
+      controlOutput output = control.computeOutputSpeedPosition();
+
+      speedAzm = output.azmSpeed;
+      speedElv = output.elvSpeed;
+
+      // control.stepperAzm.setSpeed(degToStepAzm(output.azmSpeed));
+      // control.stepperElv.setSpeed(degToStepElv(output.elvSpeed));
+      // control.stepperAzm.runSpeed();
+      // control.stepperElv.runSpeed();
     }
     break;
-    case TRACKING_MODE::TRACKING_STEP:
-      control.stepperAzm.run();
-      control.stepperElv.run();
+    case TRACKING_MODE::TRACKING_ERROR:
+
+      speedAzm = control.outputSpeedError.azmSpeed;
+      speedElv = control.outputSpeedError.elvSpeed;
+
+      // control.stepperAzm.setSpeed(degToStepAzm(control.outputSpeedError.azmSpeed));
+      // control.stepperElv.setSpeed(degToStepElv(control.outputSpeedError.elvSpeed));
+      // control.stepperAzm.runSpeed();
+      // control.stepperElv.runSpeed();
     break;
   }
+
+
+  control.stepperAzm.setSpeed(degToStepAzm(speedAzm));
+  control.stepperElv.setSpeed(degToStepElv(speedElv));
+  control.stepperAzm.runSpeed();
+  control.stepperElv.runSpeed();
 }
 
 void loopManual() {
 
-  #ifdef AZM_USE_ENDSTOP
-    endstopAzm.update();
-    endstopElv.update();
-  #endif
-
-  double vrx = map(analogRead(VRX_PIN),0,1024,-1000.0,1000.0);
-  double vry = map(analogRead(VRY_PIN),0,1024,1000.0,-1000.0);
-
-
-  if (abs(vrx)<300) { vrx = 0; }
-  if (abs(vry)<300) { vry = 0; }
-
-  int btn = digitalRead(BTN_PIN);
-  static long lastButtonPressed = 0;
-
-  // if (btn == BTN_PRESSED) {
-  //   lastButtonPressed = millis();
-  //   #ifndef SCOPE_TRACKER
-  //     //control.stepperAzm.setCurrentPosition(0);
-  //     //control.stepperElv.setCurrentPosition(0);
-  //   #endif
-  // }
-  // else if ((millis() - lastButtonPressed) > 100) {
-    #ifdef CAMERA_TRACKER
-      control.stepperAzm.setSpeed(degToStepAzm(vrx/200.0));
-      control.stepperElv.setSpeed(degToStepElv(vry/200.0));
-    #endif
-    #ifdef DUMBO
-      if (abs(vrx)<500) {
-        vrx = vrx / 100.0;
-      }
-      if (abs(vry)<500) {
-        vry = vry / 100.0;
-      }
-      control.stepperAzm.setSpeed(degToStepAzm(vrx/50.0));
-      control.stepperElv.setSpeed(degToStepElv(vry/50.0));
-    #endif
-    #ifdef ANTENNA_TRACKER
-      control.stepperAzm.setSpeed(degToStepAzm(vrx/50.0));
-      control.stepperElv.setSpeed(degToStepElv(vry/50.0));
-    #endif
-    #ifdef SCOPE_TRACKER
-      if (endstopAzm.read() != AZM_ENDSTOP_ACTIVE_LEVEL) {
-        control.stepperAzm.setSpeed(degToStepAzm(vrx/200.0));
-      }
-      else {
-        if (vrx > 0) {
-          control.stepperAzm.setSpeed(degToStepAzm(vrx/200.0));
-        }
-        else {
-          control.stepperAzm.setSpeed(0);
-        }
-      }
-      if (endstopElv.read() != ELV_ENDSTOP_ACTIVE_LEVEL) {
-        control.stepperElv.setSpeed(degToStepElv(vry/200.0));
-      }
-      else {
-        if (vry < 0) {
-          control.stepperElv.setSpeed(degToStepElv(vry/200.0));
-        }
-        else {
-          control.stepperElv.setSpeed(0);
-        }
-      }
-    #endif
-    control.stepperAzm.runSpeed();
-    control.stepperElv.runSpeed();
-  // }
 }
 
 void printPosition() {
   static unsigned long lastPrint = 0;
-
-  if (millis()-lastPrint>100) {
+  if (millis()-lastPrint>1000) {
     lastPrint = millis();
     SERIAL_TO_PC.print(" AZM: ");
     SERIAL_TO_PC.print(stepToDegAzm(control.stepperAzm.currentPosition()));
@@ -226,124 +187,192 @@ void printPosition() {
 
 void handleCommand(uint8_t packetId, uint8_t *dataIn, uint32_t len) {
 
-  // We are not checking the ID anymore. Any packet that is sent to us is considered
-  // to be a tracker packet. Because there is only one possible type of packet
-  // sent to the tracker. 
+  Serial.println("Received packet");
 
-  if (len == packetTrackerCmdSize){
+  switch(packetId) {
 
-    memcpy(&lastCmd, dataIn, packetTrackerCmdSize);
+    case 0x01:
+    {
+      memcpy(&control.lastCameraError, dataIn, sizeof(CameraErrorPacket));
+      // Camera error packet
+      double posX = float(control.lastCameraError.Cx)/(float(control.lastCameraError.Tx));
+      double posY = float(control.lastCameraError.Cy)/(float(control.lastCameraError.Ty));
 
-    static PacketTrackerCmd lastCmdPrev;
+      static unsigned long lastFoundTime = millis();
 
-    // Serial.print("Received command");
-    // Serial.print(" ");
-    // Serial.print(lastCmd.azm);
-    // Serial.print(" ");
-    // Serial.print(lastCmd.elv);
-    // Serial.print(" "); 
-    // Serial.print(lastCmd.timeStamp);
-    // Serial.print(" ");
-    // Serial.println(lastCmd.mode);
+      if (control.lastCameraError.isVisible) {
 
+        posX = posX - 0.5;
+        posY = -(posY - 0.5);
+        lastFoundTime = millis();
 
-    if (abs(getAngleStepper(lastCmdPrev.azm, lastCmd.azm))>20.00 or abs(getAngleStepper(lastCmdPrev.elv, lastCmd.elv))>20.00) {
-      control.setMode(TRACKING_MODE::STATIONARY);
-      lastCmdPrev = lastCmd;
-      return;
+        posX = constrain(posX, -1.0, 1.0);
+        posY = constrain(posY, -1.0, 1.0);
+
+        // Estimator Controller // 
+        double angleX = posX*15.4;
+        double angleY = posY*15.4;
+
+        int Kx = 250;
+        int Ky = 250;
+
+        double controlX = Kx*posX;
+        double controlY = Ky*posY;
+
+        control.outputSpeedError.azmSpeed = controlX;
+        control.outputSpeedError.elvSpeed = controlY;
+
+        control.outputSpeedError.azmSpeed = constrain(control.outputSpeedError.azmSpeed, -AZM_MAX_SPEED_DEG/2.0, AZM_MAX_SPEED_DEG/2.0);
+        control.outputSpeedError.elvSpeed = constrain(control.outputSpeedError.elvSpeed, -ELV_MAX_SPEED_DEG/2.0, ELV_MAX_SPEED_DEG/2.0);
+
+      }
+      else {
+        if (millis()-lastFoundTime>300) {
+          control.setMode(TRACKING_MODE::STATIONARY);
+          posX = 0;
+          posY = 0;
+        }
+        else {
+          control.setMode(TRACKING_MODE::TRACKING_POSITION);
+        }
+      }
     }
+    break;
 
-    lastCmdPrev = lastCmd;
-  // switch(packetId) {
-  //   case CAPSULE_ID::TRACKER_CMD:
-    lastCmdTime = millis();
-    control.setMode((TRACKING_MODE)lastCmd.mode);
+    case 0x02:
+    {
+    // Absolute position packet
+      memcpy(&control.lastPosition, dataIn, sizeof(PositionPacket));
+      azmEstimator.update(control.lastPosition.azm,millis());
+      elvEstimator.update(control.lastPosition.elv,millis());
+      azmEstimator.setMaxTimeWindow(globalParameter.control.maxTimeWindow);
+      elvEstimator.setMaxTimeWindow(globalParameter.control.maxTimeWindow);
 
-    switch (lastCmd.mode) {
-      case TRACKING_MODE::STATIONARY: 
-      break;
-      case TRACKING_MODE::TRACKING_SMOOTH:
-        // .println(lastSerialCmd.timeStamp);
-        azmEstimator.update(lastCmd.azm,millis());
-        elvEstimator.update(lastCmd.elv,millis());
-        azmEstimator.setMaxTimeWindow(lastCmd.maxTimeWindow);
-        elvEstimator.setMaxTimeWindow(lastCmd.maxTimeWindow);
-        // static unsigned lastTime = lastCmd.timeStamp;
-        // Serial.print("TimeStampDiff: ");
-        // Serial.println(lastCmd.timeStamp);
-        // lastTime = lastCmd.timeStamp;
-        azmFilter.setCutoffFreq(lastCmd.cutoffFreq);
-        elvFilter.setCutoffFreq(lastCmd.cutoffFreq);
-      break;
-      case TRACKING_MODE::TRACKING_STEP:
-        control.stepperAzm.moveTo((long)degToStepAzm(lastCmd.azm));
-        control.stepperElv.moveTo((long)degToStepElv(lastCmd.elv));
-      break;
+      azmFilter.setCutoffFreq(globalParameter.control.cutOffFreq);
+      elvFilter.setCutoffFreq(globalParameter.control.cutOffFreq);
     }
-//   break;
-// }
+    break;
+
+    case 0x03:
+    // Pointer position packet
+    break;
   }
 }
 
 void doHoming() {
-  #ifdef AZM_USE_ENDSTOP
-    endstopAzm.attach(AZM_ENDSTOP_PIN, INPUT_PULLUP);
-    endstopAzm.interval(50); // interval in ms
-  #endif
+}
 
-  #ifdef ELV_USE_ENDSTOP
-    endstopElv.attach(ELV_ENDSTOP_PIN, INPUT_PULLUP);
-    endstopElv.interval(50); // interval in ms
-  #endif
 
-  //endstopElv.attach(ELV_ENDSTOP_PIN, INPUT_PULLUP);
-  //endstopElv.interval(50); // interval in ms
+void loopWebserver() {
+  // listen for incoming clients
+  EthernetClient client = server.available();
+  if (client) {
+    // Serial.println("new client");
+    // an HTTP request ends with a blank line
+    boolean currentLineIsBlank = true;
+    String httpRequest = "";
 
-  for (int i = 0; i < 10; i++) {
-    digitalWrite(LED_BUILTIN, HIGH);
-    delay(10);
-    digitalWrite(LED_BUILTIN, LOW);
-    delay(10);
-    #ifdef AZM_USE_ENDSTOP
-      endstopAzm.update();
-    #endif
-    #ifdef ELV_USE_ENDSTOP
-      endstopElv.update();
-    #endif
+    while (client.connected()) {
+      if (client.available()) {
+        char c = client.read();
+        // Serial.write(c);
+        httpRequest += c;
+
+        // if you've gotten to the end of the line (received a newline
+        // character) and the line is blank, the HTTP request has ended,
+        // so you can send a reply
+        if (c == '\n' && currentLineIsBlank) {
+
+          // parse the HTTP request to extract form data
+          if (httpRequest.indexOf("GET /?") != -1) {
+            // extract parameters from the HTTP request
+            int speedIndex = httpRequest.indexOf("speed=");
+            int positionIndex = httpRequest.indexOf("&position=");
+            int accelerationIndex = httpRequest.indexOf("&acceleration=");
+
+            if (speedIndex != -1 && positionIndex != -1 && accelerationIndex != -1) {
+              // update variables with the values from the form
+              speed = httpRequest.substring(speedIndex + 6, positionIndex).toFloat();
+              position = httpRequest.substring(positionIndex + 10, accelerationIndex).toFloat();
+              acceleration = httpRequest.substring(accelerationIndex + 14).toFloat();
+            }
+          }
+
+          // send a standard http response header
+          client.println("HTTP/1.1 200 OK");
+          client.println("Content-Type: text/html");
+          client.println("Connection: close");
+          client.println();
+
+          // send the web page
+          client.print(readHTML());
+
+          // Save parameters to config file
+          saveConfigFile();
+          break;
+        }
+        if (c == '\n') {
+          // you're starting a new line
+          currentLineIsBlank = true;
+        } else if (c != '\r') {
+          // you've gotten a character on the current line
+          currentLineIsBlank = false;
+        }
+      }
+    }
+    client.stop();
+    // Serial.println("client disconnected");
+  }
+}
+
+void readConfigFile() {
+  File configFile = SD.open("/config.txt");
+  
+  if (configFile) {
+    String line = configFile.readStringUntil('\n');
+    configFile.close();
+
+    // Parse the line to extract parameter values
+    sscanf(line.c_str(), "%f,%f,%f", &speed, &position, &acceleration);
+  } else {
+    // Serial.println("Error opening config.txt");
+  }
+}
+
+void saveConfigFile() {
+  File configFile = SD.open("/config.txt", FILE_WRITE);
+
+  // Erase the content of the file
+  configFile.truncate(0);
+  
+  if (configFile) {
+    // Save parameters to config.txt
+    configFile.printf("%.2f,%.2f,%.2f", speed, position, acceleration);
+    configFile.close();
+  } else {
+    // Serial.println("Error opening config.txt for writing");
+  }
+}
+
+String readHTML() {
+  File htmlFile = SD.open("/index.html");
+  String html = "";
+
+  if (htmlFile) {
+    while (htmlFile.available()) {
+      String line = htmlFile.readStringUntil('\n');
+      // Replace placeholders with actual parameter values
+      line.replace("{{speed}}", String(speed));
+      line.replace("{{position}}", String(position));
+      line.replace("{{acceleration}}", String(acceleration));
+
+      html += line;
+    }
+    htmlFile.close();
+  } else {
+    // Serial.println("Error opening index.html");
+    html = "Error loading HTML file";
   }
 
-  #ifdef AZM_USE_ENDSTOP
-      while (endstopAzm.read() != AZM_ENDSTOP_ACTIVE_LEVEL) {
-        endstopAzm.update();
-        #ifdef AZM_HOMING_DIRECTION_CW
-          control.stepperAzm.setSpeed(degToStepAzm(AZM_HOMING_SPEED));
-          control.stepperAzm.runSpeed();
-        #endif 
-        #ifdef AZM_HOMING_DIRECTION_CCW
-          control.stepperAzm.setSpeed(degToStepAzm(-AZM_HOMING_SPEED));
-          control.stepperAzm.runSpeed();
-        #endif
-      }
-      control.stepperAzm.setCurrentPosition(degToStepAzm(AZM_ENDSTOP_POSITION));
-      control.stepperAzm.moveTo(degToStepAzm(0));
-      control.stepperAzm.runToPosition();
-  #endif 
-
-  #ifdef ELV_USE_ENDSTOP
-      while (endstopElv.read()!= ELV_ENDSTOP_ACTIVE_LEVEL) {
-        endstopElv.update();
-        Serial.println(endstopElv.read());
-        #ifdef ELV_HOMING_DIRECTION_CW
-          control.stepperElv.setSpeed(degToStepElv(ELV_HOMING_SPEED));
-          control.stepperElv.runSpeed();
-        #endif 
-        #ifdef ELV_HOMING_DIRECTION_CCW
-          control.stepperElv.setSpeed(degToStepElv(-ELV_HOMING_SPEED));
-          control.stepperElv.runSpeed();
-        #endif
-      }
-      control.stepperElv.setCurrentPosition(degToStepElv(ELV_ENDSTOP_POSITION));
-  #else
-      control.stepperElv.setCurrentPosition(0);
-  #endif
+  return html;
 }

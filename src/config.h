@@ -5,11 +5,6 @@
 #define STEP_ELV_PIN  24
 #define DIR_ELV_PIN   25
 
-#define VRX_PIN  A4
-#define VRY_PIN  A5
-#define BTN_PIN  A1
-#define BTN_PRESSED 0
-
 #ifdef ANTENNA_TRACKER
 
     #define MIN_PULSE_WIDTH 5 // For the driver, in microseconds
@@ -95,6 +90,8 @@
 
     #define AZM_INVERT_DIR true
     #define ELV_INVERT_DIR false
+
+    #define AZM_ENCODER_PIN A1
 #endif 
 
 #ifdef SCOPE_TRACKER

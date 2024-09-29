@@ -133,9 +133,11 @@ controlOutput conClass::computeOutputSpeedPosition() {
 }
 
 conClass::conClass()
-: stepperAzm(AccelStepper::DRIVER, STEP_AZM_PIN, DIR_AZM_PIN), 
-  stepperElv(AccelStepper::DRIVER, STEP_ELV_PIN, DIR_ELV_PIN),
-  azm(AZM_ACC_LIMIT), elv(ELV_ACC_LIMIT)
+:   azmSpr(AZM_SPR), elvSpr(ELV_SPR), 
+    azmGear(AZM_RATIO), elvGear(ELV_RATIO),
+    stepperAzm(AccelStepper::DRIVER, STEP_AZM_PIN, DIR_AZM_PIN), 
+    stepperElv(AccelStepper::DRIVER, STEP_ELV_PIN, DIR_ELV_PIN),
+    azm(AZM_ACC_LIMIT), elv(ELV_ACC_LIMIT)
 {
     stepperAzm.setMaxSpeed(AZM_MAX_SPEED);
     stepperAzm.setAcceleration(AZM_MAX_ACCEL);
@@ -165,21 +167,25 @@ void conClass::setMode(TRACKING_MODE modeIn) {
     mode = modeIn;
 }
 
-long  degToStepAzm(double deg) {
-    return (AZM_RATIO * AZM_SPR * deg / 360);
+long  conClass::degToStepAzm(double deg) {
+    return (azmGear * azmSpr * deg / 360);
 }
 
-double stepToDegAzm(long step) {
-    return (360.00 * step / (AZM_SPR * AZM_RATIO));
+double conClass::stepToDegAzm(long step) {
+    return (360.00 * step / (azmSpr * azmGear));
 }
 
-long  degToStepElv(double deg) {
-    return (ELV_RATIO * ELV_SPR * deg / 360);
+long  conClass::degToStepElv(double deg) {
+    return (elvGear * elvSpr * deg / 360);
 }
 
-double stepToDegElv(long step) {
-    return (360.00 * step / (ELV_SPR * ELV_RATIO));
+double conClass::stepToDegElv(long step) {
+    return (360.00 * step / (elvSpr * elvGear));
 }
+
+void conClass::setGroundPosition(PositionPacket positionIn) {
+    groundPosition = positionIn;
+};
 
 double getAngleStepper(double angle1, double angle2) {
     double angle = angle2 - angle1;

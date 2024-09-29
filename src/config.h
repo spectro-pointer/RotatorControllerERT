@@ -91,11 +91,54 @@
     #define AZM_INVERT_DIR true
     #define ELV_INVERT_DIR false
 
-    #define AZM_ENCODER_PIN A1
+    #define AZM_ENCODER_PIN A0
+#endif 
+
+
+#ifdef SPECTROBOT
+    #define MIN_PULSE_WIDTH 5 // For the driver, in microseconds
+
+    #define AZM_SPR 3200 // Consider microstep
+    #define ELV_SPR 3200 // Consider microstep
+
+    #define AZM_RATIO (167.0/14.0) // Gear ratio between stepper and tracker head
+    #define ELV_RATIO (167.0/14.0) // Gear ratio between stepper and tracker head
+
+    #define AZM_MAX_ANGLE 180.0
+    #define AZM_MIN_ANGLE -180.0
+
+    #define ELV_MAX_ANGLE 90.0
+    #define ELV_MIN_ANGLE -20.0
+
+    #define AZM_MAX_SPEED_DEG 10.0
+    #define ELV_MAX_SPEED_DEG 10.0
+
+    #define AZM_MAX_ACCEL_DEG 50.0
+    #define ELV_MAX_ACCEL_DEG 50.0
+
+    #define AZM_ACC_LIMIT true
+    #define ELV_ACC_LIMIT true
+
+    #define AZM_INVERT_DIR false
+    #define ELV_INVERT_DIR true
+
+    #define AZM_USE_ENDSTOP true
+    #define ELV_USE_ENDSTOP true
+
+    #define AZM_ENDSTOP_PIN 26
+    #define AZM_ENDSTOP_ACTIVE_LEVEL LOW
+    #define AZM_ENDSTOP_POSITION 0.0
+    #define AZM_HOMING_DIRECTION_CCW
+    #define AZM_HOMING_SPEED -10.0
+
+    #define ELV_ENDSTOP_PIN 27
+    #define ELV_ENDSTOP_ACTIVE_LEVEL LOW
+    #define ELV_ENDSTOP_POSITION 0.0
+    #define ELV_HOMING_DIRECTION_CW
+    #define ELV_HOMING_SPEED -10.0
 #endif 
 
 #ifdef SCOPE_TRACKER
-
     #define MIN_PULSE_WIDTH 5 // For the driver, in microseconds
 
     #define AZM_SPR 3200 // Consider microstep

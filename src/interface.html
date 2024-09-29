@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Tracker Configuration</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+
+        form {
+            background-color: #f2f2f2;
+            padding: 20px;
+            border-radius: 5px;
+        }
+
+        h2 {
+            margin-bottom: 10px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+        }
+
+        input[type="number"],
+        input[type="text"],
+        input[type="submit"] {
+            width: calc(25% - 10px);
+            padding: 8px;
+            margin-bottom: 10px;
+            box-sizing: border-box;
+        }
+
+        input[type="submit"] {
+            background-color: #4CAF50;
+            color: white;
+            cursor: pointer;
+        }
+
+        input[type="submit"]:hover {
+            background-color: #45a049;
+        }
+
+        #sendFileButton {
+            background-color: #e72107;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        #sendFileButton:hover {
+            background-color: #1e1bc8;
+        }
+        .checkbox-container {
+            margin: 10px 0;
+        }
+
+        .checkbox-label {
+            font-size: 20px; /* Tamaño de la letra */
+        }
+
+        #Check1 + .checkbox-label {
+            color: red;
+        }
+
+        #Check2 + .checkbox-label {
+            color: green;
+        }
+
+        #Check3 + .checkbox-label {
+            color: blue;
+        }
+    </style>
+    <script type="text/javascript">
+    </script>
+</head>
+<body>
+    <h1>Setup Tracker Global Parameter</h1>
+    <form action="/" method="get">
+        <!-- Azimuth Axis Parameter -->
+        <h2>Azimuth Axis Parameter</h2>
+        <label>Max Acceleration:</label>
+        <input type="number" name="AmaxAcc" value="{{AmaxAcc}}"/> <label>Ref: 1000</label>
+        <br/>
+
+        <label>Max Speed:</label>
+        <input type="number" name="AmaxSpe" value="{{AmaxSpe}}"/> <label>Ref: 500</label>
+        <br/>
+
+        <label>Step Per Revolution:</label>
+        <input type="number" name="AstepRev" value="{{AstepRev}}"/> <label>Ref: 3200</label>
+        <br/>
+
+        <label>GearBox:</label>
+        <input type="number" step="0.001" name="AgearBox" value="{{AgearBox}}" /> <label>Ref: </label>
+        <br/>
+
+        <label>Azimuth Limit:</label>
+        <input type="number" name="AlimExist" value="{{AlimExist}}" />  <label>Ref: 1</label>
+        <br/>
+
+        <label>Limit Min:</label>
+        <input type="number" name="AlimMin" value="{{AlimMin}}"/>  <label>Ref: -180</label>
+        <br/>
+
+        <label>Limit Max:</label>
+        <input type="number" name="AlimMax" value="{{AlimMax}}"/>  <label>Ref: 180</label>
+        <br/>
+
+        <label>Direction CCw CW:</label>
+        <input type="number" name="Adir" value="{{Adir}}" />  <label>Ref: 1</label>
+        <br/>
+
+        <label>Backlash:</label>
+        <input type="number" name="Aback" value="{{Aback}}" />  <label>Ref: 0</label>
+        <br/>
+
+        <!-- Elevation Axis Parameter -->
+        <h2>Elevation Axis Parameter</h2>
+        <label>Max Acceleration:</label>
+        <input type="number" name="EmaxAcc" value="{{EmaxAcc}}" />  <label>Ref: 1000</label>
+        <br/>
+
+        <label>Max Speed:</label>
+        <input type="number" name="EmaxSpe" value="{{EmaxSpe}}"/>  <label>Ref: 500</label>
+        <br/>
+
+        <label>Step Per Revolution:</label>
+        <input type="number" name="EstepRev" value="{{EstepRev}}" />  <label>Ref: 3200</label>
+        <br/>
+
+        <label>GearBox:</label>
+        <input type="number" step="0.001" name="EgearBox" value="{{EgearBox}}"/>  <label>Ref:</label>
+        <br/>
+
+        <label>Elevation Limit:</label>
+        <input type="number" name="ElimExist" value="{{ElimExist}}" />  <label>Ref: 1</label>
+        <br/>
+
+        <label>Limit Min:</label>
+        <input type="number" name="ElimMin" value="{{ElimMin}}" />  <label>Ref: -30</label>
+        <br/>
+
+        <label>Limit Max:</label>
+        <input type="number" name="ElimMax" value="{{ElimMax}}"/>  <label>Ref: 90</label>
+        <br/>
+
+        <label>Direction CCw CW:</label>
+        <input type="number" name="Edir" value="{{Edir}}"/>  <label>Ref: 0</label>
+        <br/>
+
+        <label>Backlash:</label>
+        <input type="number" name="Eback" value="{{Eback}}" />  <label>Ref: 0</label>
+        <br/>
+
+        <!-- Ethernet Parameters -->
+        <h2>System Parameters - Ethernet Parameters</h2>
+        <label>IP:</label>
+        <input type="text" name="ethernetIp" value="192.168.1.100"/>
+
+        <label>Port:</label>
+        <input type="number" name="port" value="8888"/>
+
+        <!-- Control Parameters -->
+        <h2>Control Parameters</h2>
+        <label>KP:</label>
+        <input type="number" step="0.01" name="kp" value="{{kp}}"/> <label>Ref: 25</label>
+        <br/>
+
+        <label>KD:</label>
+        <input type="number" step="0.01" name="kd" value="{{kd}}"/> <label>Ref: 5</label>
+        <br/>
+
+        <label>Cutoff Frequency:</label>
+        <input type="number" step="0.01" name="freq" value="{{freq}}"/><label>Ref: 10.0</label>
+        <br/>
+
+        <label>Max Time Window:</label>
+        <input type="number" name="maxTime" value="{{maxTime}}"/><label>Ref: 3000ms</label>
+        <br/>
+
+        <label>Mode:</label>
+        <input type="number" name="mode" value="{{mode}}"/><label>Ref: Cam = 1, Pos = 2, Man = 3</label>
+        <br/>
+
+        <input type="submit" value="Submit">
+    </form>
+</body>
+</html>

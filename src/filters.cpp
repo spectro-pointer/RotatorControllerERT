@@ -7,7 +7,6 @@ SecondOrderLowPassFilter::SecondOrderLowPassFilter(double cutoffFreq, double sam
     yPrev = yPrev2 = xPrev = xPrev2 = 0.0;
 }
 
-
 double SecondOrderLowPassFilter::process(double input) {
     double omega = 2.0 * M_PI * cutoffFreq / sampleRate;
     double alpha = sin(omega) / (2.0 * 0.7071); // 0.7071 is the damping ratio for a Butterworth filter
@@ -43,9 +42,10 @@ void SecondOrderLowPassFilter::setCutoffFreq(double cutoffFreq) {
     this->cutoffFreq = cutoffFreq;
 }
 
-
 SecondOrderEstimator::SecondOrderEstimator() {
     xPrev = xPrevTime = xPrev2 = xPrev2Time = sampleCount = 0.0;
+    maxSpeed = 1;
+    maxAccel = 1;
 }
 
 void SecondOrderEstimator::update(double input, unsigned long timeMillis) {
@@ -63,18 +63,20 @@ double SecondOrderEstimator::computeAngle(unsigned long timeMillis) {
     if (sampleCount < 3) {
         return x;
     }
-    else if (sampleCount > 3 and (timeMillis - xTime) < maxTimeWindow) {
-        //Serial.println("In the window");
+    else if (sampleCount >= 3 and (timeMillis - xTime) < maxTimeWindow) {
         double xDot = getAngleFilter(xPrev,x) / ((xTime - xPrevTime) / 1000.0);
+        xDot = constrain(xDot, -maxSpeed, maxSpeed);
         double xDotPrev = getAngleFilter(xPrev2,xPrev) / ((xPrevTime - xPrev2Time) / 1000.0);
         double xDotDot = (xDot - xDotPrev) / ((xTime - xPrevTime) / 1000.0);
+        xDotDot = constrain(xDotDot, -maxAccel, maxAccel);
         return x+xDot*(timeMillis-xTime)/1000.0+0.5*xDotDot*pow((timeMillis-xTime)/1000.0,2);
     }
     else {
-        //Serial.println("Out of the window");
         double xDot = getAngleFilter(xPrev,x) / ((xTime - xPrevTime) / 1000.0);
+        xDot = constrain(xDot, -maxSpeed, maxSpeed);
         double xDotPrev = getAngleFilter(xPrev2,xPrev) / ((xPrevTime - xPrev2Time) / 1000.0);
         double xDotDot = (xDot - xDotPrev) / ((xTime - xPrevTime) / 1000.0);
+        xDotDot = constrain(xDotDot, -maxAccel, maxAccel);
         return x+xDot*(maxTimeWindow)/1000.0+0.5*xDotDot*pow((maxTimeWindow)/1000.0,2);
     }
 }
@@ -83,18 +85,20 @@ double SecondOrderEstimator::compute(unsigned long timeMillis) {
     if (sampleCount < 3) {
         return x;
     }
-    else if (sampleCount > 3 and (timeMillis - xTime) < maxTimeWindow) {
-        //Serial.println("In the window");
-        double xDot = x-xPrev / ((xTime - xPrevTime) / 1000.0);
-        double xDotPrev = xPrev-xPrev2 / ((xPrevTime - xPrev2Time) / 1000.0);
+    else if (sampleCount >= 3 and (timeMillis - xTime) < maxTimeWindow) {
+        double xDot = (x-xPrev) / ((xTime - xPrevTime) / 1000.0);
+        xDot = constrain(xDot, -maxSpeed, maxSpeed);
+        double xDotPrev = (xPrev-xPrev2) / ((xPrevTime - xPrev2Time) / 1000.0);
         double xDotDot = (xDot - xDotPrev) / ((xTime - xPrevTime) / 1000.0);
+        xDotDot = constrain(xDotDot, -maxAccel, maxAccel);
         return x+xDot*(timeMillis-xTime)/1000.0+0.5*xDotDot*pow((timeMillis-xTime)/1000.0,2);
     }
     else {
-        //Serial.println("Out of the window");
-        double xDot = x-xPrev / ((xTime - xPrevTime) / 1000.0);
-        double xDotPrev = xPrev-xPrev2 / ((xPrevTime - xPrev2Time) / 1000.0);
+        double xDot = (x-xPrev) / ((xTime - xPrevTime) / 1000.0);
+        xDot = constrain(xDot, -maxSpeed, maxSpeed);
+        double xDotPrev = (xPrev-xPrev2) / ((xPrevTime - xPrev2Time) / 1000.0);
         double xDotDot = (xDot - xDotPrev) / ((xTime - xPrevTime) / 1000.0);
+        xDotDot = constrain(xDotDot, -maxAccel, maxAccel);
         return x+xDot*(maxTimeWindow)/1000.0+0.5*xDotDot*pow((maxTimeWindow)/1000.0,2);
     }
 }
@@ -119,6 +123,14 @@ unsigned long SecondOrderEstimator::getMaxTimeWindow() {
     return maxTimeWindow;
 }
 
+void SecondOrderEstimator::setMaxSpeed(double maxSpeedIn) {
+    maxSpeed = maxSpeedIn;
+}
+
+void SecondOrderEstimator::setMaxAccel(double maxAccelIn) {
+    maxAccel = maxAccelIn;
+}
+
 double getAngleFilter(double angle1, double angle2) {
     double angle = angle2 - angle1;
     if (angle > 180) {
@@ -129,4 +141,5 @@ double getAngleFilter(double angle1, double angle2) {
     }
     return angle;
 }
+
 

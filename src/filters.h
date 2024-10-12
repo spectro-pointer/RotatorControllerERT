@@ -1,4 +1,3 @@
-#include "config.h"
 #include <Arduino.h>
 
 class SecondOrderLowPassFilter {
@@ -31,6 +30,9 @@ class SecondOrderEstimator {
         int sampleCount;
         unsigned long maxTimeWindow;
 
+        double maxSpeed;
+        double maxAccel;
+
     public:
         SecondOrderEstimator();
         void update(double input, unsigned long timeMillis);
@@ -40,7 +42,8 @@ class SecondOrderEstimator {
         void reset(double initialValue);
         void setMaxTimeWindow(unsigned long maxTimeWindowIn);
         unsigned long getMaxTimeWindow();
+        void setMaxSpeed(double maxSpeedIn);
+        void setMaxAccel(double maxAccelIn);
 };
 
 double getAngleFilter(double angle1, double angle2);
-

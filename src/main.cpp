@@ -19,15 +19,15 @@ unsigned long lastCameraFrame = 0;
 float azmManualPosition = 0;
 float elvManualPosition = 0;
 
-Adafruit_MMA8451 mma = Adafruit_MMA8451();
+// Adafruit_MMA8451 mma = Adafruit_MMA8451();
 
 // MAC address for Teensy 1
-byte mac[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED};
-IPAddress ip(192, 168, 1, 100); // IP address for Teensy 1
+// byte mac[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED};
+// IPAddress ip(192, 168, 1, 100); // IP address for Teensy 1
 // unsigned int localPort = 8888; // Local port to listen on
 
-EthernetUDP udp;
-EthernetServer server(80);
+// EthernetUDP udp;
+// EthernetServer server(80);
 
 void handleCommand(uint8_t packetId, uint8_t *dataIn, uint32_t len);
 CapsuleStatic command(handleCommand);
@@ -47,8 +47,8 @@ Bounce elvEndstop = Bounce();
 SecondOrderEstimator azmEstimator;
 SecondOrderEstimator elvEstimator;
 
-SecondOrderLowPassFilter azmFilter(0.1, 100);
-SecondOrderLowPassFilter elvFilter(0.1, 100);
+SecondOrderLowPassFilter azmFilter(1.0, 100);
+SecondOrderLowPassFilter elvFilter(1.0, 100);
 
 SecondOrderEstimator latEstimator;
 SecondOrderEstimator lonEstimator;
@@ -66,10 +66,12 @@ static TrackerParameter globalParameter;
 
 String readHTML();
 void applyConfig();
+void readDefaultConfig();
 void readConfigFile();
 void saveConfigFile();
 void setupWebserver();
 void loopWebserver();
+void fakePositionUpdate();
 double distanceTo(double lat1, double lng1, double lat2, double lng2);
 double azimuthTo(double lat1, double lng1, double lat2, double lng2);
 AnglePacket computeAngle(double lat1, double lng1, double alt1, double lat2, double lng2, double alt2);
@@ -97,9 +99,9 @@ void setup() {
     elvEndstop.interval(25); // interval in ms
   #endif
 
-  Ethernet.begin(mac, ip);
-  udp.begin(8888);
-  server.begin();
+  // Ethernet.begin(mac, ip);
+  // udp.begin(8888);
+  // server.begin();
 
   // Initialize SD car
   if (!SD.begin(BUILTIN_SDCARD)) {
@@ -108,7 +110,8 @@ void setup() {
   }
 
   // Read parameters from config file
-  readConfigFile();
+  // readConfigFile();
+  readDefaultConfig();
   applyConfig();
 
   doHoming();
@@ -123,11 +126,38 @@ void setup() {
 
 void loop() {
   loopAutomatic();
-  printPosition();
-  loopWebserver();
-  // double azmSinWave = 7*sin(millis()/10000.0*2*PI);
-  // control.stepperAzm.moveTo(control.degToStepAzm(azmSinWave));
-  // control.stepperAzm.run();
+  fakePositionUpdate();
+  // printPosition();
+  // loopWebserver();
+}
+
+void fakePositionUpdate() {
+  static unsigned long lastFakePositionUpdate = millis();
+
+  if (millis()-lastFakePositionUpdate>300) {
+    lastFakePositionUpdate = millis();
+    float fakeAzmPosition = sin(millis()/5000.0)*30.0;
+    float fakeElvPosition = cos(millis()/5000.0)*10.0;
+
+    azmEstimator.update(fakeAzmPosition,millis());
+    elvEstimator.update(fakeElvPosition,millis());
+    azmEstimator.setMaxTimeWindow(3000);
+    elvEstimator.setMaxTimeWindow(3000);
+
+    // azmFilter.setCutoffFreq(globalParameter.control.freq);
+    // elvFilter.setCutoffFreq(globalParameter.control.freq);
+    control.setMode(TRACKING_MODE::TRACKING_POSITION);
+
+    // Serial.print("Updating with: ");
+    // Serial.print(fakeAzmPosition);
+    // Serial.print(" ");
+    // Serial.println(fakeElvPosition);
+  }
+}
+
+void loopAutomatic() {
+  double speedAzm = 0;
+  double speedElv = 0;
 
   // int packetSize = udp.parsePacket();
   // if (packetSize) {
@@ -135,37 +165,32 @@ void loop() {
   //     command.decode(udp.read());
   //   }
   // }
-}
 
-void loopAutomatic() {
-  double speedAzm = 0;
-  double speedElv = 0;
-
-  int packetSize = udp.parsePacket();
-  if (packetSize) {
-    for (int i = 0; i < packetSize; i++) {
-      command.decode(udp.read());
-    }
+  while(CMD_PORT.available()) {
+      command.decode(CMD_PORT.read());
   }
 
   static TRACKING_MODE lastMode = TRACKING_MODE::TRACKING_STOP;
 
   if (lastMode != control.getMode()) {
-    Serial.print("Mode changed to ");
+    Serial.print("Mode changed from: ");
+    Serial.print(lastMode);
+    Serial.print(" to: ");
     Serial.println(control.getMode());
     lastMode = control.getMode();
-    // if (control.getMode() == TRACKING_MODE::TRACKING_POSITION) {
-    //     azmEstimator.reset(control.lastAngle.azm);
-    //     elvEstimator.reset(control.lastAngle.elv);
-    //     latEstimator.reset(control.lastPosition.lat);
-    //     lonEstimator.reset(control.lastPosition.lon);
-    //     altEstimator.reset(control.lastPosition.alt);
-    // }
+    if (control.getMode() == TRACKING_MODE::TRACKING_POSITION) {
+        azmEstimator.reset(control.lastAngle.azm);
+        elvEstimator.reset(control.lastAngle.elv);
+        latEstimator.reset(control.lastPosition.lat);
+        lonEstimator.reset(control.lastPosition.lon);
+        altEstimator.reset(control.lastPosition.alt);
+    }
   }
 
   switch(control.getMode()) {
 
     case TRACKING_MODE::TRACKING_MANUAL:
+    // {
 
       // azmEstimator.reset();
       // elvEstimator.reset();
@@ -191,7 +216,8 @@ void loopAutomatic() {
         // Serial.print(azmManualPosition,10);
         // Serial.print(" ELV: ");
         // Serial.println(elvManualPosition,10);
-      }
+      // }
+    }
     break;
 
     case TRACKING_MODE::TRACKING_POSITION:
@@ -199,8 +225,8 @@ void loopAutomatic() {
       static unsigned long lastEstimationTime = millis();
       if ((millis()-lastEstimationTime) >= 1000.0/ESTIMATION_RATE) {
   
-        double vrx = 0;
-        double vry = 0;
+        // double vrx = 0;
+        // double vry = 0;
 
         // internalAzmNorthEstimate -= (vrx/500.0)/ESTIMATION_RATE;
         // internalElvHorizonEstimate -= (vry/500.0)/ESTIMATION_RATE;
@@ -210,10 +236,6 @@ void loopAutomatic() {
         double azmEstimation = azmEstimator.computeAngle(millis());
         double elvEstimation = elvEstimator.computeAngle(millis());
 
-        // Serial.print("A");
-        // Serial.print(azmEstimation);
-        // Serial.print(" E");
-        // Serial.println(elvEstimation);
 
         // double latEstimation = latEstimator.computeAngle(millis());
         // double lonEstimation = lonEstimator.computeAngle(millis());
@@ -230,12 +252,12 @@ void loopAutomatic() {
         double internalAzmValue = ((int(((azmEstimation-internalAzmNorthEstimate)+900.0)*100000.0)%36000000)/100000.0)-180.0;
         double internalElvValue = elvEstimation-internalElvHorizonEstimate;
 
-        double azmFiltered = azmEstimation; // ;.process(azmEstimation);
-        double elvFiltered = elvEstimation; //elvFilter.process(elvEstimation);
+        double azmFiltered = azmFilter.process(azmEstimation);
+        double elvFiltered = elvFilter.process(elvEstimation);
 
-        // Serial.print("A");
+        // // Serial.print("A");
         // Serial.print(azmFiltered);
-        // Serial.print(" E");
+        // Serial.print(",");
         // Serial.println(elvFiltered);
 
         PacketTrackerCmd newCmd;
@@ -245,6 +267,15 @@ void loopAutomatic() {
 
         newCmd.elv = constrain(newCmd.elv, globalParameter.elvParameter.limMin, globalParameter.elvParameter.limMax);
         newCmd.azm = constrain(newCmd.azm, globalParameter.azmParameter.limMin, globalParameter.azmParameter.limMax);
+
+        static unsigned long lastPrint = millis();
+        if (millis()-lastPrint>100) {
+          lastPrint = millis();
+          Serial.print("");
+          Serial.print(azmFiltered);
+          Serial.print(",");
+          Serial.println(elvFiltered);
+        }
 
         control.update(newCmd);
       }
@@ -296,14 +327,28 @@ void loopAutomatic() {
     }
   }
 
-  static unsigned long lastPrint = millis();
-  if (millis()-lastPrint>100) {
-    lastPrint = millis();
-    // Serial.print(" AZM: ");
-    // Serial.print(control.degToStepAzm(speedAzm));
-    // Serial.print(" ELV: ");
-    // Serial.println(control.degToStepElv(speedElv));
-  }
+  // static unsigned long lastPrint = millis();
+  // if (millis()-lastPrint>100) {
+  //   lastPrint = millis();
+  //   // Serial.print(" Mode: ");
+  //   // Serial.print(control.getMode());
+  //   // Serial.print(" AZM: ");
+  //   // Serial.print(control.stepToDegAzm(control.stepperAzm.currentPosition()));
+  //   // Serial.print(" ELV: ");
+  //   // Serial.println(control.stepToDegElv(control.stepperElv.currentPosition()));
+  // }
+
+  // float azmFakePosition = sin(millis()/500.0)*20.0;
+  // float elvFakePosition = cos(millis()/500.0)*10.0;
+
+  // control.stepperAzm.moveTo(control.degToStepAzm(azmFakePosition));
+  // control.stepperElv.moveTo(control.degToStepElv(elvFakePosition));
+
+  // control.stepperAzm.run();
+  // control.stepperElv.run();
+
+  // speedAzm = control.stepperAzm.speed();
+  // speedElv = control.stepperElv.speed();
 
   control.stepperAzm.setSpeed(control.degToStepAzm(speedAzm));
   control.stepperElv.setSpeed(control.degToStepElv(speedElv));
@@ -334,9 +379,10 @@ void printPosition() {
     uint8_t packetId = 33; 
 
     uint8_t* packetToSend = command.encode(packetId,packetData,sizeof(AnglePacket));
-    udp.beginPacket(ipBroadcast, 8888);
-    udp.write(packetToSend,command.getCodedLen(sizeof(AnglePacket)));
-    udp.endPacket();
+    // udp.beginPacket(ipBroadcast, 8888);
+    // udp.write(packetToSend,command.getCodedLen(sizeof(AnglePacket)));
+    // udp.endPacket();
+    CMD_PORT.write(packetToSend,command.getCodedLen(sizeof(AnglePacket)));
     delete[] packetToSend;
   }
 }
@@ -438,8 +484,8 @@ void handleCommand(uint8_t packetId, uint8_t *dataIn, uint32_t len) {
       azmEstimator.setMaxTimeWindow(500);
       elvEstimator.setMaxTimeWindow(500);
 
-      azmFilter.setCutoffFreq(globalParameter.control.freq);
-      elvFilter.setCutoffFreq(globalParameter.control.freq);
+      // azmFilter.setCutoffFreq(globalParameter.control.freq);
+      // elvFilter.setCutoffFreq(globalParameter.control.freq);
     }
     break;
 
@@ -478,21 +524,25 @@ void doHoming() {
   if (globalParameter.elvParameter.limExist) {
 
   #ifdef DUMBO
-    double avg = 0;
-    if (mma.begin()) {
-      for (int i = 0; i < 100; i++) {
-        mma.read();
-        double elv = atan2(mma.y, mma.z)*180.0/PI;
-        avg += elv;
-        delay(1);
-      }
-    }
-    avg /= 100.0;
-    float offset = 3;
-    control.stepperElv.setCurrentPosition(control.degToStepElv(avg+offset));
-    delay(1000);
+    // double avg = 0;
+    // if (mma.begin()) {
+    //   for (int i = 0; i < 100; i++) {
+    //     mma.read();
+    //     double elv = atan2(mma.y, mma.z)*180.0/PI;
+    //     avg += elv;
+    //     delay(1);
+    //   }
+    // }
+    // avg /= 100.0;
+    // float offset = 3;
+    // control.stepperElv.setCurrentPosition(control.degToStepElv(avg+offset));
+    // delay(1000);
+    // Serial.print("ELV: ");
+    // Serial.println(avg);
+
+    control.stepperElv.setCurrentPosition(0);
     Serial.print("ELV: ");
-    Serial.println(avg);
+    Serial.println(0);
   #endif 
 
   #ifdef SPECTROBOT
@@ -520,21 +570,25 @@ void doHoming() {
 
     #ifdef DUMBO
       // Take 100 samples of the encoder value and do the average
-      double avg = 0;
-      for (int i = 0; i < 100; i++) {
-        avg += analogRead(AZM_ENCODER_PIN);
-        delay(1);
-      }
-      avg /= 100.0;
-      double azmRead = map(avg,103,923, 0,360);
-      azmRead = (int((azmRead + (360-200))*100.0)%36000)/100.0;
-      if (azmRead>180) {
-        azmRead -= 360;
-      }
-      control.stepperAzm.setCurrentPosition(control.degToStepAzm(azmRead));
-      delay(1000);
+      // double avg = 0;
+      // for (int i = 0; i < 100; i++) {
+      //   avg += analogRead(AZM_ENCODER_PIN);
+      //   delay(1);
+      // }
+      // avg /= 100.0;
+      // double azmRead = map(avg,103,923, 0,360);
+      // azmRead = (int((azmRead + (360-200))*100.0)%36000)/100.0;
+      // if (azmRead>180) {
+      //   azmRead -= 360;
+      // }
+      // control.stepperAzm.setCurrentPosition(control.degToStepAzm(azmRead));
+      // delay(1000);
+      // Serial.print("AZM: ");
+      // Serial.println(azmRead);
+
+      control.stepperAzm.setCurrentPosition(0);
       Serial.print("AZM: ");
-      Serial.println(azmRead);
+      Serial.println(0);
     #endif
 
     #ifdef SPECTROBOT
@@ -561,173 +615,232 @@ void doHoming() {
 }
 
 void loopWebserver() {
-  // listen for incoming clients
-  EthernetClient client = server.available();
-  if (client) {
-    // Serial.println("new client");
-    // an HTTP request ends with a blank line
-    boolean currentLineIsBlank = true;
-    String httpRequest = "";
+  // // listen for incoming clients
+  // EthernetClient client = server.available();
+  // if (client) {
+  //   // Serial.println("new client");
+  //   // an HTTP request ends with a blank line
+  //   boolean currentLineIsBlank = true;
+  //   String httpRequest = "";
 
-    while (client.connected()) {
-      if (client.available()) {
-        char c = client.read();
-        // Serial.write(c);
-        httpRequest += c;
+  //   while (client.connected()) {
+  //     if (client.available()) {
+  //       char c = client.read();
+  //       // Serial.write(c);
+  //       httpRequest += c;
 
-        // if you've gotten to the end of the line (received a newline
-        // character) and the line is blank, the HTTP request has ended,
-        // so you can send a reply
-        if (c == '\n' && currentLineIsBlank) {
+  //       // if you've gotten to the end of the line (received a newline
+  //       // character) and the line is blank, the HTTP request has ended,
+  //       // so you can send a reply
+  //       if (c == '\n' && currentLineIsBlank) {
 
-          // parse the HTTP request to extract form data
-          if (httpRequest.indexOf("GET /?") != -1) {
-            // extract parameters from the HTTP request
-            int AmaxAccIndex = httpRequest.indexOf("AmaxAcc=");
-            // Serial.println(AmaxAccIndex);
-            int AmaxSpeIndex = httpRequest.indexOf("&AmaxSpe=");
-            // Serial.println(AmaxSpeIndex);
-            int AstepRevIndex = httpRequest.indexOf("&AstepRev=");
-            // Serial.println(AstepRevIndex);
-            int AgearBoxIndex = httpRequest.indexOf("&AgearBox=");
-            // Serial.println(AgearBoxIndex);
-            int AlimExistIndex = httpRequest.indexOf("&AlimExist=");
-            // Serial.println(AlimExistIndex);
-            int AlimMinIndex = httpRequest.indexOf("&AlimMin=");
-            // Serial.println(AlimMinIndex);
-            int AlimMaxIndex= httpRequest.indexOf("&AlimMax=");
-            // Serial.println(AlimMaxIndex);
-            int AdirIndex = httpRequest.indexOf("&Adir=");
-            // Serial.println(AdirIndex);
-            int AbackIndex = httpRequest.indexOf("&Aback=");
-            // Serial.println(AbackIndex);
-            // elevacion  
-            int EmaxAccIndex = httpRequest.indexOf("&EmaxAcc=");
-            // Serial.println(EmaxAccIndex);
-            int EmaxSpeIndex = httpRequest.indexOf("&EmaxSpe=");
-            // Serial.println(EmaxSpeIndex);
-            int EstepRevIndex = httpRequest.indexOf("&EstepRev=");
-            // Serial.println(EstepRevIndex);
-            int EgearBoxIndex = httpRequest.indexOf("&EgearBox=");
-            // Serial.println(EgearBoxIndex);
-            int ElimExistIndex = httpRequest.indexOf("&ElimExist=");
-            // Serial.println(ElimExistIndex);
-            int ElimMinIndex = httpRequest.indexOf("&ElimMin=");
-            // Serial.println(ElimMinIndex);
-            int ElimMaxIndex= httpRequest.indexOf("&ElimMax=");
-            // Serial.println(ElimMaxIndex);
-            int EdirIndex = httpRequest.indexOf("&Edir=");
-            // Serial.println(EdirIndex);
-            int EbackIndex = httpRequest.indexOf("&Eback=");
-            // Serial.println(EbackIndex);
-            //
-            // int ipIndex = httpRequest.indexOf("&ip=");
-            int portIndex = httpRequest.indexOf("&port=");
-            // Serial.println(portIndex);
-            //
-            int kpIndex = httpRequest.indexOf("&kp=");
-            // Serial.println(kpIndex);
-            int kdIndex = httpRequest.indexOf("&kd=");
-            // Serial.println(kpIndex);
-            int freqIndex = httpRequest.indexOf("&freq=");
-            // Serial.println(freqIndex);
-            int maxTimeIndex = httpRequest.indexOf("&maxTime=");
-            // Serial.println(maxTimeIndex);
-            int modeIndex = httpRequest.indexOf("&mode=");
-            //
-            if (AmaxAccIndex != -1 
-                && AmaxSpeIndex != -1 
-                && AstepRevIndex != -1 
-                && AgearBoxIndex != -1 
-                && AlimExistIndex != -1 
-                && AlimMinIndex != -1
-                && AlimMaxIndex != -1
-                && AdirIndex != -1
-                && AbackIndex != -1
-                && EmaxAccIndex != -1
-                && ElimMaxIndex != -1
-                && EstepRevIndex != -1
-                && EgearBoxIndex != -1
-                && ElimExistIndex != -1
-                && ElimMinIndex != -1
-                && ElimMaxIndex != -1
-                && EdirIndex != -1
-                && EbackIndex != -1
-                // && ipIndex != -1
-                && portIndex !=-1
-                && kpIndex != -1
-                && kdIndex != -1
-                && freqIndex !=-1
-                && maxTimeIndex != -1
-                && modeIndex != -1
-                ) {
-              // update variables with the values from the form            
-              // Example pour modifier les paramètres
-              globalParameter.azmParameter.maxAcc = httpRequest.substring(AmaxAccIndex + 8, AmaxSpeIndex).toFloat();
-              globalParameter.azmParameter.maxSpe = httpRequest.substring(AmaxSpeIndex + 9, AstepRevIndex).toFloat();
-              globalParameter.azmParameter.stepRev = httpRequest.substring(AstepRevIndex + 10, AgearBoxIndex).toFloat();
-              globalParameter.azmParameter.gearBox = httpRequest.substring(AgearBoxIndex + 10, AlimExistIndex).toFloat();
-              globalParameter.azmParameter.limExist = httpRequest.substring(AlimExistIndex + 11, AlimMinIndex).toFloat();
-              globalParameter.azmParameter.limMin = httpRequest.substring(AlimMinIndex + 9, AlimMaxIndex).toFloat();
-              globalParameter.azmParameter.limMax = httpRequest.substring(AlimMaxIndex + 9, AdirIndex).toFloat();
-              globalParameter.azmParameter.dir = httpRequest.substring(AdirIndex + 6, AbackIndex).toFloat();
-              globalParameter.azmParameter.back = httpRequest.substring(AbackIndex + 7, EmaxAccIndex).toFloat();
-              // elevacion
-              globalParameter.elvParameter.maxAcc = httpRequest.substring(EmaxAccIndex + 9, EmaxSpeIndex).toFloat();
-              globalParameter.elvParameter.maxSpe = httpRequest.substring(EmaxSpeIndex + 9, EstepRevIndex).toFloat();
-              globalParameter.elvParameter.stepRev = httpRequest.substring(EstepRevIndex + 10, EgearBoxIndex).toFloat();
-              globalParameter.elvParameter.gearBox = httpRequest.substring(EgearBoxIndex + 10, ElimExistIndex).toFloat();
-              globalParameter.elvParameter.limExist = httpRequest.substring(ElimExistIndex + 11, ElimMinIndex).toFloat();
-              globalParameter.elvParameter.limMin = httpRequest.substring(ElimMinIndex + 9, ElimMaxIndex).toFloat();
-              globalParameter.elvParameter.limMax = httpRequest.substring(ElimMaxIndex + 9, EdirIndex).toFloat();
-              globalParameter.elvParameter.dir = httpRequest.substring(EdirIndex + 6, EbackIndex).toFloat();
-              globalParameter.elvParameter.back = httpRequest.substring(EbackIndex + 7, portIndex).toFloat();
-              //
-              // globalParameter.ethernetParameter.ip = httpRequest.substring(ipIndex + 4, portIndex).toFloat();
-              globalParameter.ethernetParameter.port = httpRequest.substring(portIndex + 6, kpIndex).toFloat();
-              //
-              globalParameter.control.kp = httpRequest.substring(kpIndex + 4, kdIndex).toFloat();
-              globalParameter.control.kd = httpRequest.substring(kdIndex + 4, freqIndex).toFloat();
-              globalParameter.control.freq = httpRequest.substring(freqIndex + 6, maxTimeIndex).toFloat();
-              globalParameter.control.maxTime = httpRequest.substring(maxTimeIndex + 9, modeIndex).toFloat();
-              globalParameter.mode = httpRequest.substring(modeIndex + 6).toInt();
-              Serial.print("Received config with mode: ");
-              Serial.print(globalParameter.mode);
-              Serial.println();
+  //         // parse the HTTP request to extract form data
+  //         if (httpRequest.indexOf("GET /?") != -1) {
+  //           // extract parameters from the HTTP request
+  //           int AmaxAccIndex = httpRequest.indexOf("AmaxAcc=");
+  //           // Serial.println(AmaxAccIndex);
+  //           int AmaxSpeIndex = httpRequest.indexOf("&AmaxSpe=");
+  //           // Serial.println(AmaxSpeIndex);
+  //           int AstepRevIndex = httpRequest.indexOf("&AstepRev=");
+  //           // Serial.println(AstepRevIndex);
+  //           int AgearBoxIndex = httpRequest.indexOf("&AgearBox=");
+  //           // Serial.println(AgearBoxIndex);
+  //           int AlimExistIndex = httpRequest.indexOf("&AlimExist=");
+  //           // Serial.println(AlimExistIndex);
+  //           int AlimMinIndex = httpRequest.indexOf("&AlimMin=");
+  //           // Serial.println(AlimMinIndex);
+  //           int AlimMaxIndex= httpRequest.indexOf("&AlimMax=");
+  //           // Serial.println(AlimMaxIndex);
+  //           int AdirIndex = httpRequest.indexOf("&Adir=");
+  //           // Serial.println(AdirIndex);
+  //           int AbackIndex = httpRequest.indexOf("&Aback=");
+  //           // Serial.println(AbackIndex);
+  //           // elevacion  
+  //           int EmaxAccIndex = httpRequest.indexOf("&EmaxAcc=");
+  //           // Serial.println(EmaxAccIndex);
+  //           int EmaxSpeIndex = httpRequest.indexOf("&EmaxSpe=");
+  //           // Serial.println(EmaxSpeIndex);
+  //           int EstepRevIndex = httpRequest.indexOf("&EstepRev=");
+  //           // Serial.println(EstepRevIndex);
+  //           int EgearBoxIndex = httpRequest.indexOf("&EgearBox=");
+  //           // Serial.println(EgearBoxIndex);
+  //           int ElimExistIndex = httpRequest.indexOf("&ElimExist=");
+  //           // Serial.println(ElimExistIndex);
+  //           int ElimMinIndex = httpRequest.indexOf("&ElimMin=");
+  //           // Serial.println(ElimMinIndex);
+  //           int ElimMaxIndex= httpRequest.indexOf("&ElimMax=");
+  //           // Serial.println(ElimMaxIndex);
+  //           int EdirIndex = httpRequest.indexOf("&Edir=");
+  //           // Serial.println(EdirIndex);
+  //           int EbackIndex = httpRequest.indexOf("&Eback=");
+  //           // Serial.println(EbackIndex);
+  //           //
+  //           // int ipIndex = httpRequest.indexOf("&ip=");
+  //           int portIndex = httpRequest.indexOf("&port=");
+  //           // Serial.println(portIndex);
+  //           //
+  //           int kpIndex = httpRequest.indexOf("&kp=");
+  //           // Serial.println(kpIndex);
+  //           int kdIndex = httpRequest.indexOf("&kd=");
+  //           // Serial.println(kpIndex);
+  //           int freqIndex = httpRequest.indexOf("&freq=");
+  //           // Serial.println(freqIndex);
+  //           int maxTimeIndex = httpRequest.indexOf("&maxTime=");
+  //           // Serial.println(maxTimeIndex);
+  //           int modeIndex = httpRequest.indexOf("&mode=");
+  //           //
+  //           if (AmaxAccIndex != -1 
+  //               && AmaxSpeIndex != -1 
+  //               && AstepRevIndex != -1 
+  //               && AgearBoxIndex != -1 
+  //               && AlimExistIndex != -1 
+  //               && AlimMinIndex != -1
+  //               && AlimMaxIndex != -1
+  //               && AdirIndex != -1
+  //               && AbackIndex != -1
+  //               && EmaxAccIndex != -1
+  //               && ElimMaxIndex != -1
+  //               && EstepRevIndex != -1
+  //               && EgearBoxIndex != -1
+  //               && ElimExistIndex != -1
+  //               && ElimMinIndex != -1
+  //               && ElimMaxIndex != -1
+  //               && EdirIndex != -1
+  //               && EbackIndex != -1
+  //               // && ipIndex != -1
+  //               && portIndex !=-1
+  //               && kpIndex != -1
+  //               && kdIndex != -1
+  //               && freqIndex !=-1
+  //               && maxTimeIndex != -1
+  //               && modeIndex != -1
+  //               ) {
+  //             // update variables with the values from the form            
+  //             // Example pour modifier les paramètres
+  //             globalParameter.azmParameter.maxAcc = httpRequest.substring(AmaxAccIndex + 8, AmaxSpeIndex).toFloat();
+  //             globalParameter.azmParameter.maxSpe = httpRequest.substring(AmaxSpeIndex + 9, AstepRevIndex).toFloat();
+  //             globalParameter.azmParameter.stepRev = httpRequest.substring(AstepRevIndex + 10, AgearBoxIndex).toFloat();
+  //             globalParameter.azmParameter.gearBox = httpRequest.substring(AgearBoxIndex + 10, AlimExistIndex).toFloat();
+  //             globalParameter.azmParameter.limExist = httpRequest.substring(AlimExistIndex + 11, AlimMinIndex).toFloat();
+  //             globalParameter.azmParameter.limMin = httpRequest.substring(AlimMinIndex + 9, AlimMaxIndex).toFloat();
+  //             globalParameter.azmParameter.limMax = httpRequest.substring(AlimMaxIndex + 9, AdirIndex).toFloat();
+  //             globalParameter.azmParameter.dir = httpRequest.substring(AdirIndex + 6, AbackIndex).toFloat();
+  //             globalParameter.azmParameter.back = httpRequest.substring(AbackIndex + 7, EmaxAccIndex).toFloat();
+  //             // elevacion
+  //             globalParameter.elvParameter.maxAcc = httpRequest.substring(EmaxAccIndex + 9, EmaxSpeIndex).toFloat();
+  //             globalParameter.elvParameter.maxSpe = httpRequest.substring(EmaxSpeIndex + 9, EstepRevIndex).toFloat();
+  //             globalParameter.elvParameter.stepRev = httpRequest.substring(EstepRevIndex + 10, EgearBoxIndex).toFloat();
+  //             globalParameter.elvParameter.gearBox = httpRequest.substring(EgearBoxIndex + 10, ElimExistIndex).toFloat();
+  //             globalParameter.elvParameter.limExist = httpRequest.substring(ElimExistIndex + 11, ElimMinIndex).toFloat();
+  //             globalParameter.elvParameter.limMin = httpRequest.substring(ElimMinIndex + 9, ElimMaxIndex).toFloat();
+  //             globalParameter.elvParameter.limMax = httpRequest.substring(ElimMaxIndex + 9, EdirIndex).toFloat();
+  //             globalParameter.elvParameter.dir = httpRequest.substring(EdirIndex + 6, EbackIndex).toFloat();
+  //             globalParameter.elvParameter.back = httpRequest.substring(EbackIndex + 7, portIndex).toFloat();
+  //             //
+  //             // globalParameter.ethernetParameter.ip = httpRequest.substring(ipIndex + 4, portIndex).toFloat();
+  //             globalParameter.ethernetParameter.port = httpRequest.substring(portIndex + 6, kpIndex).toFloat();
+  //             //
+  //             globalParameter.control.kp = httpRequest.substring(kpIndex + 4, kdIndex).toFloat();
+  //             globalParameter.control.kd = httpRequest.substring(kdIndex + 4, freqIndex).toFloat();
+  //             globalParameter.control.freq = httpRequest.substring(freqIndex + 6, maxTimeIndex).toFloat();
+  //             globalParameter.control.maxTime = httpRequest.substring(maxTimeIndex + 9, modeIndex).toFloat();
+  //             globalParameter.mode = httpRequest.substring(modeIndex + 6).toInt();
+  //             Serial.print("Received config with mode: ");
+  //             Serial.print(globalParameter.mode);
+  //             Serial.println();
               
-              // Save parameters to config file
-              applyConfig();
-              Serial.print("Config applied: ");
-              Serial.println(globalParameter.control.maxTime);
-              saveConfigFile();
-            }
-            else {
-              Serial.println("Error parsing HTTP request");
-            }
-          }
+  //             // Save parameters to config file
+  //             applyConfig();
+  //             Serial.print("Config applied: ");
+  //             Serial.println(globalParameter.control.maxTime);
+  //             saveConfigFile();
+  //           }
+  //           else {
+  //             Serial.println("Error parsing HTTP request");
+  //           }
+  //         }
 
-          // send a standard http response header
-          client.println("HTTP/1.1 200 OK");
-          client.println("Content-Type: text/html");
-          client.println("Connection: close");
-          client.println();
+  //         // send a standard http response header
+  //         client.println("HTTP/1.1 200 OK");
+  //         client.println("Content-Type: text/html");
+  //         client.println("Connection: close");
+  //         client.println();
 
-          // send the web page
-          client.print(readHTML());
-          break;
-        }
-        if (c == '\n') {
-          // you're starting a new line
-          currentLineIsBlank = true;
-        } else if (c != '\r') {
-          // you've gotten a character on the current line
-          currentLineIsBlank = false;
-        }
-      }
-    }
-    client.stop();
-    // Serial.println("client disconnected");
-  }
+  //         // send the web page
+  //         client.print(readHTML());
+  //         break;
+  //       }
+  //       if (c == '\n') {
+  //         // you're starting a new line
+  //         currentLineIsBlank = true;
+  //       } else if (c != '\r') {
+  //         // you've gotten a character on the current line
+  //         currentLineIsBlank = false;
+  //       }
+  //     }
+  //   }
+  //   client.stop();
+  //   // Serial.println("client disconnected");
+  // }
+}
+
+void readDefaultConfig() {
+  #ifdef DUMBO
+    // #define MIN_PULSE_WIDTH 5 // For the driver, in microseconds
+
+    // #define AZM_SPR 3200 // Consider microstep
+    // #define ELV_SPR 3200 // Consider microstep
+
+    // #define AZM_RATIO 26.6703125 // Gear ratio between stepper and tracker head
+    // #define ELV_RATIO 50.09375 // Gear ratio between stepper and tracker head
+
+    // #define AZM_MAX_ANGLE 180.0
+    // #define AZM_MIN_ANGLE -180.0
+
+    // #define ELV_MAX_ANGLE 90.0
+    // #define ELV_MIN_ANGLE -20.0
+
+    // #define AZM_MAX_SPEED_DEG 500.0
+    // #define ELV_MAX_SPEED_DEG 500.0
+
+    // #define AZM_MAX_ACCEL_DEG 1000.0
+    // #define ELV_MAX_ACCEL_DEG 1000.0
+
+    // #define AZM_ACC_LIMIT true
+    // #define ELV_ACC_LIMIT true
+
+    // #define AZM_INVERT_DIR true
+    // #define ELV_INVERT_DIR false
+
+    // #define AZM_ENCODER_PIN A0
+
+    globalParameter.azmParameter.maxAcc = 1000.0;
+    globalParameter.azmParameter.maxSpe = 500.0;
+    globalParameter.azmParameter.stepRev = 12800;
+    globalParameter.azmParameter.gearBox = 26.6703125;
+    globalParameter.azmParameter.limExist = true;
+    globalParameter.azmParameter.limMin = -180.0;
+    globalParameter.azmParameter.limMax = 180.0;
+    globalParameter.azmParameter.dir = true;
+    globalParameter.azmParameter.back = false;
+
+    globalParameter.elvParameter.maxAcc = 1000.0;
+    globalParameter.elvParameter.maxSpe = 500.0;
+    globalParameter.elvParameter.stepRev = 12800;
+    globalParameter.elvParameter.gearBox = 50.09375;
+    globalParameter.elvParameter.limExist = true;
+    globalParameter.elvParameter.limMin = -20.0;
+    globalParameter.elvParameter.limMax = 90.0;
+    globalParameter.elvParameter.dir = true;
+    globalParameter.elvParameter.back = false;
+
+    globalParameter.ethernetParameter.port = 8888;
+    globalParameter.control.kp = 0.1;
+    globalParameter.control.kd = 0.1;
+    globalParameter.control.freq = 100;
+    globalParameter.control.maxTime = 1000;
+    globalParameter.mode = TRACKING_MODE::TRACKING_MANUAL;
+  #endif
 }
 
 void readConfigFile() {

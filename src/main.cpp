@@ -5,7 +5,7 @@
 #include "config.h"
 #include "filters.h"
 #include <SD.h>
-
+#include <NativeEthernet.h>
 #include <Wire.h>
 #include <Adafruit_MMA8451.h>
 #include <Adafruit_Sensor.h>
@@ -564,7 +564,7 @@ void loopWebserver() {
   // listen for incoming clients
   EthernetClient client = server.available();
   if (client) {
-    // Serial.println("new client");
+     Serial.println("new client");
     // an HTTP request ends with a blank line
     boolean currentLineIsBlank = true;
     String httpRequest = "";
@@ -572,7 +572,7 @@ void loopWebserver() {
     while (client.connected()) {
       if (client.available()) {
         char c = client.read();
-        // Serial.write(c);
+        Serial.write(c);
         httpRequest += c;
 
         // if you've gotten to the end of the line (received a newline

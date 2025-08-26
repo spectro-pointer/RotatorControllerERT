@@ -506,7 +506,8 @@ void doHoming() {
       Serial.println("Waiting for ELV Endstop");
     } while (!endstopReached);
     Serial.println("ELV Endstop reached");
-    control.stepperElv.setCurrentPosition(control.stepToDegElv(ELV_ENDSTOP_POSITION));
+    control.stepperElv.setCurrentPosition(control.degToStepElv(ELV_ENDSTOP_POSITION));
+
   #endif
   }
   else {

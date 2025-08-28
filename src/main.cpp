@@ -9,6 +9,81 @@
 #include <Wire.h>
 #include <Adafruit_MMA8451.h>
 #include <Adafruit_Sensor.h>
+#include <math.h>
+
+static TrackerParameter globalParameter;
+// ========================= PoV CONFIG =========================
+// MOD: destinos UNICAST (ajusta a tu(s) PC(s) receptores). 0.0.0.0 = deshabilitado
+static IPAddress trackletTarget1(0,0,0,0);
+static IPAddress trackletTarget2(0,0,0,0);
+
+// MOD: periodo y gating para tracklets (si algún día reactivás emitTracklet())
+static const unsigned long trackletPeriodMs = 100;   // 10 Hz
+static const float         trackletDeltaMinDeg = 0.02f;
+static const unsigned long trackletHeartbeatMs = 1000; // 1 Hz
+
+// MOD: metadatos PoV mínimos
+static const char* SITE_ID       = "ARG-TDF-01";
+static const char* INSTRUMENT_ID = "N300_QHY4040_A";
+static uint32_t    EXP_MS        = 30;
+static float       SEEING_ARCSEC = 1.8f;
+
+// ========================= Tiempo UTC =========================
+static int64_t g_utcOffsetMs = 0; // ajuste respecto de millis() para alinear a UTC real
+unsigned long getUtcMillis() { return millis() + (unsigned long)(g_utcOffsetMs); }
+
+String iso8601_from_utc_ms(unsigned long utc_ms) {
+  time_t t = utc_ms / 1000;
+  uint16_t ms = utc_ms % 1000;
+  tm *ut = gmtime(&t);
+  char buf[40];
+  snprintf(buf, sizeof(buf), "%04d-%02d-%02dT%02d:%02d:%02d.%03uZ",
+    ut->tm_year + 1900, ut->tm_mon + 1, ut->tm_mday,
+    ut->tm_hour, ut->tm_min, ut->tm_sec, (unsigned)ms);
+  return String(buf);
+}
+
+// ========================= AltAz -> RA/Dec =========================
+static inline double deg2rad(double d){ return d * 0.017453292519943295; }
+static inline double rad2deg(double r){ return r * 57.29577951308232;   }
+
+double jd_from_unix_ms(unsigned long utc_ms) {
+  return 2440587.5 + (double)utc_ms / 86400000.0;
+}
+double gmst_rad_from_jd(double jd){
+  double T = (jd - 2451545.0)/36525.0;
+  double gmst = 280.46061837 + 360.98564736629*(jd-2451545.0) + 0.000387933*T*T - T*T*T/38710000.0;
+  gmst = fmod(gmst, 360.0); if (gmst<0) gmst += 360.0;
+  return deg2rad(gmst);
+}
+
+// Convención usada: Az=0° Norte, 90° Este; El=0° horizonte.
+void altaz_to_radec(double az_deg, double el_deg, double lat_deg, double lon_deg,
+                    unsigned long utc_ms, double &ra_deg, double &dec_deg) {
+  double az = deg2rad(az_deg);
+  double alt= deg2rad(el_deg);
+  double lat= deg2rad(lat_deg);
+  double lon= deg2rad(lon_deg);
+
+  double sinDec = sin(lat)*sin(alt) + cos(lat)*cos(alt)*cos(az);
+  double dec = asin(sinDec);
+  double cosH = (sin(alt) - sin(lat)*sinDec) / (cos(lat)*cos(dec));
+  if (cosH >  1.0) cosH = 1.0;
+  if (cosH < -1.0) cosH = -1.0;
+  double sinH = -sin(az)*cos(alt)/cos(dec);
+  double H = atan2(sinH, cosH);
+
+  double jd = jd_from_unix_ms(utc_ms);
+  double gmst = gmst_rad_from_jd(jd);
+  double lst = gmst + lon; // lon >0 Este
+  double ra = lst - H;
+
+  while (ra < 0)        ra += 2*M_PI;
+  while (ra >= 2*M_PI)  ra -= 2*M_PI;
+
+  ra_deg  = rad2deg(ra);
+  dec_deg = rad2deg(dec);
+}
 
 bool joystickAvailable = false;
 bool cameraAvailable = false;
@@ -23,8 +98,7 @@ Adafruit_MMA8451 mma = Adafruit_MMA8451();
 
 // MAC address for Teensy 1
 byte mac[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED};
-IPAddress ip(192, 168, 1, 100); // IP address for Teensy 1
-// unsigned int localPort = 8888; // Local port to listen on
+IPAddress ip(192, 168, 1, 100);
 
 EthernetUDP udp;
 EthernetServer server(80);
@@ -58,11 +132,103 @@ SecondOrderLowPassFilter latFilter(0.1, 100);
 SecondOrderLowPassFilter lonFilter(0.1, 100);
 SecondOrderLowPassFilter altFilter(0.1, 100);
 
-
 void doHoming();
 void printPosition();
 
-static TrackerParameter globalParameter;
+// =====================================================================
+// MOD: Telemetría extendida (paquete 34) — ωcmd/ωmeas + modo + flags
+// =====================================================================
+#pragma pack(push,1)
+struct StatusPacket {
+  float v_cmd_az;   // deg/s comandado
+  float v_cmd_el;   // deg/s comandado
+  float v_meas_az;  // deg/s medido (derivada)
+  float v_meas_el;  // deg/s medido
+  uint8_t mode;     // TRACKING_MODE actual (cast a uint8)
+  uint8_t flags;    // bit0: cameraAvailable, bit1: joystickAvailable
+};
+#pragma pack(pop)
+
+void sendStatusTelemetry(double v_cmd_az, double v_cmd_el) {
+  static unsigned long lastSend = 0;
+  const unsigned long periodMs = 100; // 10 Hz
+  if (millis() - lastSend < periodMs) return;
+  lastSend = millis();
+
+  // Medición de velocidad a partir de la posición real
+  static long lastPosAzStep = 0;
+  static long lastPosElStep = 0;
+  static unsigned long lastT = 0;
+
+  long posAzStep = control.stepperAzm.currentPosition();
+  long posElStep = control.stepperElv.currentPosition();
+  unsigned long nowT = millis();
+
+  double v_meas_az = 0.0;
+  double v_meas_el = 0.0;
+
+  if (lastT != 0) {
+    double dt = (nowT - lastT) / 1000.0;
+    if (dt < 1e-6) dt = 1e-6;
+
+    double azNow  = control.stepToDegAzm(posAzStep);
+    double azPrev = control.stepToDegAzm(lastPosAzStep);
+    // wrap ΔAz a [-180,+180]
+    double dAz = fmod(azNow - azPrev + 540.0, 360.0) - 180.0;
+    double dEl = control.stepToDegElv(posElStep) - control.stepToDegElv(lastPosElStep);
+
+    v_meas_az = dAz / dt;
+    v_meas_el = dEl / dt;
+  }
+
+  lastPosAzStep = posAzStep;
+  lastPosElStep = posElStep;
+  lastT = nowT;
+
+  StatusPacket pkt;
+  pkt.v_cmd_az  = (float)v_cmd_az;
+  pkt.v_cmd_el  = (float)v_cmd_el;
+  pkt.v_meas_az = (float)v_meas_az;
+  pkt.v_meas_el = (float)v_meas_el;
+  pkt.mode      = (uint8_t)control.getMode();
+  pkt.flags     = (cameraAvailable ? 0x01 : 0x00) | (joystickAvailable ? 0x02 : 0x00);
+
+  // Mismos destinos que printPosition()
+  static const IPAddress targets[] = {
+    IPAddress(192,168,1,220),
+    IPAddress(0,0,0,0)
+  };
+  static const size_t NUM_TARGETS = sizeof(targets)/sizeof(targets[0]);
+
+  uint8_t* enc = command.encode(34, (uint8_t*)&pkt, sizeof(pkt)); // MOD: nuevo ID 34
+  bool any = false; for (size_t i=0;i<NUM_TARGETS;i++) if (targets[i]!=IPAddress(0,0,0,0)) any=true;
+
+  if (any) {
+    for (size_t i=0;i<NUM_TARGETS;i++) {
+      if (targets[i]==IPAddress(0,0,0,0)) continue;
+      udp.beginPacket(targets[i], (unsigned int)globalParameter.ethernetParameter.port);
+      udp.write(enc, command.getCodedLen(sizeof(pkt)));
+      udp.endPacket();
+    }
+  } else {
+    IPAddress bcast(255,255,255,255);
+    udp.beginPacket(bcast, (unsigned int)globalParameter.ethernetParameter.port);
+    udp.write(enc, command.getCodedLen(sizeof(pkt)));
+    udp.endPacket();
+  }
+  delete[] enc;
+}
+// =====================================================================
+// FIN telemetría extendida
+// =====================================================================
+
+// (Dejamos el prototipo de tracklet deshabilitado en el Teensy)
+#if 0
+void emitTracklet();
+#endif
+
+
+
 
 String readHTML();
 void applyConfig();
@@ -74,9 +240,7 @@ double distanceTo(double lat1, double lng1, double lat2, double lng2);
 double azimuthTo(double lat1, double lng1, double lat2, double lng2);
 AnglePacket computeAngle(double lat1, double lng1, double alt1, double lat2, double lng2, double alt2);
 
-
 void setup() {  
-
   CMD_PORT.begin(CMD_BAUD);
   SERIAL_TO_PC.begin(115200);
 
@@ -86,55 +250,43 @@ void setup() {
     pinMode(AZM_ENCODER_PIN, INPUT);
   #endif
 
-  // Spectrobot
   #ifdef AZM_ENDSTOP_PIN
     azmEndstop.attach(AZM_ENDSTOP_PIN ,  INPUT); 
-    azmEndstop.interval(25); // interval in ms
+    azmEndstop.interval(25);
   #endif
 
   #ifdef ELV_ENDSTOP_PIN
     elvEndstop.attach(ELV_ENDSTOP_PIN ,  INPUT);
-    elvEndstop.interval(25); // interval in ms
+    elvEndstop.interval(25);
   #endif
 
   Ethernet.begin(mac, ip);
   udp.begin(8888);
   server.begin();
 
-  // Initialize SD car
   if (!SD.begin(BUILTIN_SDCARD)) {
     Serial.println("Error initializing SD card");
     while (1);
   }
 
-  // Read parameters from config file
   readConfigFile();
   applyConfig();
 
-  doHoming();
+  // doHoming();  // MOD: seguimos desactivado al arranque
+  Serial.println("[setup] Homing desactivado en arranque (solo a demanda)");
 
   PositionPacket groundPosition;
   groundPosition.lat = 46.532308;
   groundPosition.lon = 6.590961;
   groundPosition.alt = 422;
-
   control.setGroundPosition(groundPosition);
 }
 
 void loop() {
   loopAutomatic();
-  printPosition();
+  printPosition();         // id=33 (Az/El)
+  // emitTracklet();       // MOD: seguimos sin usar en Teensy
   loopWebserver();
-  // double azmSinWave = 7*sin(millis()/10000.0*2*PI);
-  // control.stepperAzm.moveTo(control.degToStepAzm(azmSinWave));
-  // control.stepperAzm.run();
-
-  // int packetSize = udp.parsePacket();
-  // if (packetSize) {
-  //   for (int i = 0; i < packetSize; i++) {
-  //     command.decode(udp.read());
-  //   }
-  // }
 }
 
 void loopAutomatic() {
@@ -154,29 +306,14 @@ void loopAutomatic() {
     Serial.print("Mode changed to ");
     Serial.println(control.getMode());
     lastMode = control.getMode();
-    // if (control.getMode() == TRACKING_MODE::TRACKING_POSITION) {
-    //     azmEstimator.reset(control.lastAngle.azm);
-    //     elvEstimator.reset(control.lastAngle.elv);
-    //     latEstimator.reset(control.lastPosition.lat);
-    //     lonEstimator.reset(control.lastPosition.lon);
-    //     altEstimator.reset(control.lastPosition.alt);
-    // }
   }
 
   switch(control.getMode()) {
 
     case TRACKING_MODE::TRACKING_MANUAL:
-
-      // azmEstimator.reset();
-      // elvEstimator.reset();
-
       if (millis()-control.lastManualTime<300) {
-
-        // speedAzm = control.lastManual.joystickX;
-        // speedElv = control.lastManual.joystickY;
-
-        azmManualPosition  = control.lastAngle.azm; //+= speedAzm/10000.0;
-        elvManualPosition  = control.lastAngle.elv; //+= speedElv/10000.0;
+        azmManualPosition  = control.lastAngle.azm;
+        elvManualPosition  = control.lastAngle.elv;
 
         azmManualPosition = constrain(azmManualPosition, globalParameter.azmParameter.limMin, globalParameter.azmParameter.limMax);
         elvManualPosition = constrain(elvManualPosition, globalParameter.elvParameter.limMin, globalParameter.elvParameter.limMax);
@@ -184,13 +321,12 @@ void loopAutomatic() {
         control.stepperAzm.moveTo(azmManualPosition);
         control.stepperElv.moveTo(elvManualPosition);
 
+        // Nota: en manual, AccelStepper reporta velocidad en pasos/s; mantenemos ωcmd a 0 aquí.
         speedAzm = control.stepperAzm.speed();
         speedElv = control.stepperElv.speed();
-
-        // Serial.print("AZM: ");
-        // Serial.print(azmManualPosition,10);
-        // Serial.print(" ELV: ");
-        // Serial.println(elvManualPosition,10);
+        // Enviamos ωcmd=0 en este modo (la Pi ya estima ωmeas).
+        speedAzm = 0; 
+        speedElv = 0;
       }
     break;
 
@@ -198,77 +334,29 @@ void loopAutomatic() {
     {
       static unsigned long lastEstimationTime = millis();
       if ((millis()-lastEstimationTime) >= 1000.0/ESTIMATION_RATE) {
-  
-        double vrx = 0;
-        double vry = 0;
-
-        // internalAzmNorthEstimate -= (vrx/500.0)/ESTIMATION_RATE;
-        // internalElvHorizonEstimate -= (vry/500.0)/ESTIMATION_RATE;
-
         lastEstimationTime = millis();
 
         double azmEstimation = azmEstimator.computeAngle(millis());
         double elvEstimation = elvEstimator.computeAngle(millis());
 
-        // Serial.print("A");
-        // Serial.print(azmEstimation);
-        // Serial.print(" E");
-        // Serial.println(elvEstimation);
-
-        // double latEstimation = latEstimator.computeAngle(millis());
-        // double lonEstimation = lonEstimator.computeAngle(millis());
-        // double altEstimation = altEstimator.computeAngle(millis());
-
-        // double latFiltered = latFilter.process(latEstimation);
-        // double lonFiltered = lonFilter.process(lonEstimation);
-        // double altFiltered = altFilter.process(altEstimation);
-
-        // AnglePacket positionFiltered = computeAngle(control.groundPosition.lat, control.groundPosition.lon, control.groundPosition.alt, latFiltered, lonFiltered, altFiltered);
-
-        // From now on all angle values are in the referential of the tracker, not north referenced
-
-        double internalAzmValue = ((int(((azmEstimation-internalAzmNorthEstimate)+900.0)*100000.0)%36000000)/100000.0)-180.0;
-        double internalElvValue = elvEstimation-internalElvHorizonEstimate;
-
-        double azmFiltered = azmEstimation; // ;.process(azmEstimation);
-        double elvFiltered = elvEstimation; //elvFilter.process(elvEstimation);
-
-        // Serial.print("A");
-        // Serial.print(azmFiltered);
-        // Serial.print(" E");
-        // Serial.println(elvFiltered);
+        double azmFiltered = azmEstimation;
+        double elvFiltered = elvEstimation;
 
         PacketTrackerCmd newCmd;
-
-        newCmd.azm = azmFiltered;
-        newCmd.elv = elvFiltered;
-
-        newCmd.elv = constrain(newCmd.elv, globalParameter.elvParameter.limMin, globalParameter.elvParameter.limMax);
-        newCmd.azm = constrain(newCmd.azm, globalParameter.azmParameter.limMin, globalParameter.azmParameter.limMax);
-
+        newCmd.azm = constrain(azmFiltered, globalParameter.azmParameter.limMin, globalParameter.azmParameter.limMax);
+        newCmd.elv = constrain(elvFiltered, globalParameter.elvParameter.limMin, globalParameter.elvParameter.limMax);
         control.update(newCmd);
       }
       controlOutput output = control.computeOutputSpeedPosition();
-
-      speedAzm = output.azmSpeed;
+      speedAzm = output.azmSpeed;  // deg/s comandados por posición
       speedElv = output.elvSpeed;
-
-      // control.stepperAzm.setSpeed(control.degToStepAzm(output.azmSpeed));
-      // control.stepperElv.setSpeed(control.degToStepElv(output.elvSpeed));
-      // control.stepperAzm.runSpeed();
-      // control.stepperElv.runSpeed();
     }
     break;
 
     case TRACKING_MODE::TRACKING_ERROR:
-
-      speedAzm = control.outputSpeedError.azmSpeed;
-      speedElv = control.outputSpeedError.elvSpeed;
-
-      // control.stepperAzm.setSpeed(degToStepAzm(control.outputSpeedError.azmSpeed));
-      // control.stepperElv.setSpeed(control.degToStepElv(control.outputSpeedError.elvSpeed));
-      // control.stepperAzm.runSpeed();
-      // control.stepperElv.runSpeed();
+      // MOD: aquí el lazo de la cámara/joystick define ωcmd
+      speedAzm = control.outputSpeedError.azmSpeed; // deg/s
+      speedElv = control.outputSpeedError.elvSpeed; // deg/s
     break;
 
     case TRACKING_MODE::TRACKING_STOP:
@@ -276,8 +364,16 @@ void loopAutomatic() {
       speedElv = 0;
     break;  
 
+    case TRACKING_MODE::TRACKING_POINTER:         // <<< MOD: nuevo caso
+    // lo tratamos como seguimiento por error (cámara/joystick)
+     speedAzm = control.outputSpeedError.azmSpeed;
+     speedElv = control.outputSpeedError.elvSpeed;
+    // aplica límites, setSpeed, runSpeed como haces en otros casos o déjalo vacío si
+    // ya usas las mismas variables fuera del switch
+   break;
   }
 
+  // Límites físicos
   if (globalParameter.azmParameter.limExist) {
     if (control.stepperAzm.currentPosition() < control.degToStepAzm(globalParameter.azmParameter.limMin)) {
       speedAzm = max(speedAzm, 0.0);
@@ -286,7 +382,6 @@ void loopAutomatic() {
       speedAzm = min(speedAzm, 0.0);
     }
   }
-
   if (globalParameter.elvParameter.limExist) {
     if (control.stepperElv.currentPosition() < control.degToStepElv(globalParameter.elvParameter.limMin)) {
       speedElv = max(speedElv, 0.0);
@@ -296,63 +391,84 @@ void loopAutomatic() {
     }
   }
 
-  static unsigned long lastPrint = millis();
-  if (millis()-lastPrint>100) {
-    lastPrint = millis();
-    // Serial.print(" AZM: ");
-    // Serial.print(control.degToStepAzm(speedAzm));
-    // Serial.print(" ELV: ");
-    // Serial.println(control.degToStepElv(speedElv));
-  }
-
   control.stepperAzm.setSpeed(control.degToStepAzm(speedAzm));
   control.stepperElv.setSpeed(control.degToStepElv(speedElv));
   control.stepperAzm.runSpeed();
   control.stepperElv.runSpeed();
+
+  // MOD: enviar telemetría extendida (ωcmd/ωmeas) a 10 Hz
+  sendStatusTelemetry(speedAzm, speedElv);
 }
 
-void loopManual() {
-
-}
+void loopManual() {}
 
 void printPosition() {
   static unsigned long lastPrint = 0;
-  if (millis()-lastPrint>100) {
-    lastPrint = millis();
-    IPAddress ipBroadcast(255,255,255,255);
+  const unsigned long periodMs = 100;  // 10 Hz
+  if (millis() - lastPrint < periodMs) return;
+  lastPrint = millis();
 
-    // We will send a capsule packet with the structure of a AnglePacket.
-    // The capsule packet will be sent to the broadcast address on port 8888.
+  static const IPAddress targets[] = {
+    IPAddress(192,168,1,220),
+    IPAddress(0,0,0,0)
+  };
+  static const size_t NUM_TARGETS = sizeof(targets)/sizeof(targets[0]);
 
-    AnglePacket angleToSend; 
-    angleToSend.azm = control.stepToDegAzm(control.stepperAzm.currentPosition());
-    angleToSend.elv = control.stepToDegElv(control.stepperElv.currentPosition());
+  AnglePacket angleToSend;
+  angleToSend.azm = control.stepToDegAzm(control.stepperAzm.currentPosition());
+  angleToSend.elv = control.stepToDegElv(control.stepperElv.currentPosition());
 
-    uint8_t packetData[sizeof(AnglePacket)];
-    memcpy(packetData, &angleToSend, sizeof(AnglePacket));
-    
-    uint8_t packetId = 33; 
+  static float lastAzm = -10000.0f, lastElv = -10000.0f;
+  static unsigned long lastHeartbeat = 0;
+  const float MIN_DELTA_DEG = 0.02f;
+  const unsigned long HEARTBEAT_MS = 1000;
 
-    uint8_t* packetToSend = command.encode(packetId,packetData,sizeof(AnglePacket));
-    udp.beginPacket(ipBroadcast, 8888);
-    udp.write(packetToSend,command.getCodedLen(sizeof(AnglePacket)));
-    udp.endPacket();
-    delete[] packetToSend;
+  const bool changed =
+      (fabs(angleToSend.azm - lastAzm) > MIN_DELTA_DEG) ||
+      (fabs(angleToSend.elv - lastElv) > MIN_DELTA_DEG);
+  const bool heartbeat = (millis() - lastHeartbeat >= HEARTBEAT_MS);
+
+  if (!changed && !heartbeat) return;
+  if (heartbeat) lastHeartbeat = millis();
+  lastAzm = angleToSend.azm;
+  lastElv = angleToSend.elv;
+
+  uint8_t packetData[sizeof(AnglePacket)];
+  memcpy(packetData, &angleToSend, sizeof(AnglePacket));
+  uint8_t* packetToSend = command.encode(33, packetData, sizeof(AnglePacket));
+
+  bool anyTarget = false;
+  for (size_t i = 0; i < NUM_TARGETS; ++i) {
+    if (targets[i] != IPAddress(0,0,0,0)) { anyTarget = true; break; }
   }
+
+  if (anyTarget) {
+    for (size_t i = 0; i < NUM_TARGETS; ++i) {
+      if (targets[i] == IPAddress(0,0,0,0)) continue;
+      udp.beginPacket(targets[i], (unsigned int)globalParameter.ethernetParameter.port);
+      udp.write(packetToSend, command.getCodedLen(sizeof(AnglePacket)));
+      udp.endPacket();
+    }
+  } else {
+    IPAddress ipBroadcast(255,255,255,255);
+    udp.beginPacket(ipBroadcast, (unsigned int)globalParameter.ethernetParameter.port);
+    udp.write(packetToSend, command.getCodedLen(sizeof(AnglePacket)));
+    udp.endPacket();
+  }
+
+  delete[] packetToSend;
 }
 
+// ========================= (opcional) emitTracklet desactivado =========================
+// Si quisieras reactivarlo, avísame y lo limpiamos para sólo UDP (sin SD).
+void emitTracklet() { /* NO USAR: dejamos a la Pi generar JSONL */ }
+// =======================================================================================
+
 void handleCommand(uint8_t packetId, uint8_t *dataIn, uint32_t len) {
-
-  // Serial.print("Received packet with packet ID: ");
-  // Serial.println(packetId);
-
   switch(packetId) {
-
-    case 0x01:
-    {
+    case 0x01: {
       control.lastCameraErrorTime = millis();
       memcpy(&control.lastCameraError, dataIn, sizeof(CameraErrorPacket));
-      // Camera error packet
       double posX = (control.lastCameraError.Cx)/100.0;
       double posY = (control.lastCameraError.Cy)/100.0;
 
@@ -372,65 +488,45 @@ void handleCommand(uint8_t packetId, uint8_t *dataIn, uint32_t len) {
         lastFoundTime = millis();
 
         bool shouldWeUsePacket = false;
-        if (joystickAvailable and control.lastCameraError.camID == 99) {
+        if (joystickAvailable && control.lastCameraError.camID == 99) {
           shouldWeUsePacket = true;
         }
-        else if (!joystickAvailable and control.lastCameraError.camID == 33) {
+        else if (!joystickAvailable && control.lastCameraError.camID == 33) {
           shouldWeUsePacket = true;
         }
 
         if (shouldWeUsePacket) {
-          float KPx = control.lastCameraError.Kp; //= globalParameter.control.kp;
-          float KPy = control.lastCameraError.Kp; //= globalParameter.control.kp;
+          float KPx = control.lastCameraError.Kp;
+          float KPy = control.lastCameraError.Kp;
 
           float maxSpeed = control.lastCameraError.maxSpeed;
-
-          static float lastPosX = posX;
-          static float lastPosY = posY;
 
           double controlX = KPx*posX;
           double controlY = KPy*posY;
 
-          control.outputSpeedError.azmSpeed = controlX;
-          control.outputSpeedError.elvSpeed = controlY;
-
-          lastPosX = posX;
-          lastPosY = posY;
-
-          control.outputSpeedError.azmSpeed = constrain(control.outputSpeedError.azmSpeed, -maxSpeed, maxSpeed);
-          control.outputSpeedError.elvSpeed = constrain(control.outputSpeedError.elvSpeed, -maxSpeed, maxSpeed);
+          control.outputSpeedError.azmSpeed = constrain(controlX, -maxSpeed, maxSpeed);
+          control.outputSpeedError.elvSpeed = constrain(controlY, -maxSpeed, maxSpeed);
         }
 
-      }
-      else {
-        if (control.lastCameraError.camID == 99 and !control.lastCameraError.isVisible) {
+      } else {
+        if (control.lastCameraError.camID == 99) {
           joystickAvailable = false;
         }
       }
 
       if ((millis()-lastFoundTime)>100) {
         control.setMode(TRACKING_MODE::TRACKING_STOP);
-        posX = 0;
-        posY = 0;
-      }
-      else {
+        posX = 0; posY = 0;
+      } else {
         control.setMode(TRACKING_MODE::TRACKING_ERROR);
       }
 
-      if ((millis()-lastCameraFrame)>50) {
-        cameraAvailable = false;
-      }
-      if ((millis()-lastJoystickFrame)>100) {
-        joystickAvailable = false;
-      }
-      
-    }
-    break;
+      if ((millis()-lastCameraFrame)>50)  cameraAvailable = false;
+      if ((millis()-lastJoystickFrame)>100) joystickAvailable = false;
+    } break;
 
-    case 0x02:
-    {
-    control.lastPositionTime = millis();
-    // Lat lon position packet
+    case 0x02: {
+      control.lastPositionTime = millis();
       memcpy(&control.lastPosition, dataIn, sizeof(PositionPacket));
 
       azmEstimator.update(control.lastAngle.azm,millis());
@@ -440,43 +536,29 @@ void handleCommand(uint8_t packetId, uint8_t *dataIn, uint32_t len) {
 
       azmFilter.setCutoffFreq(globalParameter.control.freq);
       elvFilter.setCutoffFreq(globalParameter.control.freq);
-    }
-    break;
+    } break;
 
-    // Absolute angle packet
     case 0x03:
       control.lastAngleTime = millis();
       memcpy(&control.lastAngle, dataIn, sizeof(AnglePacket));
       Serial.println("Received ABS Packet!!");
-      // azmEstimator.update(control.lastAngle.azm,millis());
-      // elvEstimator.update(control.lastAngle.elv,millis());
-      // azmEstimator.setMaxTimeWindow(500);
-      // elvEstimator.setMaxTimeWindow(500);
-
-      // azmFilter.setCutoffFreq(globalParameter.control.freq);
-      // elvFilter.setCutoffFreq(globalParameter.control.freq);
       azmManualPosition = control.lastAngle.azm;
       elvManualPosition = control.lastAngle.elv;
     break;
 
-    // Manual control packet
     case 99:
       control.lastManualTime = millis();
       memcpy(&control.lastManual, dataIn, sizeof(ManualPacket));
-      Serial.print("Manual cmd received ");
-      Serial.print(" X: ");
+      Serial.print("Manual cmd received  X: ");
       Serial.print(control.lastManual.joystickX);
       Serial.print(" Y: ");
       Serial.println(control.lastManual.joystickY);
     break;
-  
   }
 }
 
 void doHoming() {
-
   if (globalParameter.elvParameter.limExist) {
-
   #ifdef DUMBO
     double avg = 0;
     if (mma.begin()) {
@@ -491,12 +573,10 @@ void doHoming() {
     float offset = 3;
     control.stepperElv.setCurrentPosition(control.degToStepElv(avg+offset));
     delay(1000);
-    Serial.print("ELV: ");
-    Serial.println(avg);
+    Serial.print("ELV: "); Serial.println(avg);
   #endif 
 
   #ifdef SPECTROBOT
-    // Spectrobot
     bool endstopReached = false;
     do {
       control.stepperElv.setSpeed(control.degToStepElv(ELV_HOMING_SPEED));
@@ -507,42 +587,29 @@ void doHoming() {
     } while (!endstopReached);
     Serial.println("ELV Endstop reached");
     control.stepperElv.setCurrentPosition(control.degToStepElv(ELV_ENDSTOP_POSITION));
-
   #endif
-  }
-  else {
+  } else {
     delay(1000);
     Serial.println("No ELV limit switch");
     control.stepperElv.setCurrentPosition(0);
   }
 
-
   if (globalParameter.azmParameter.limExist) {
-
     #ifdef DUMBO
-      // Take 100 samples of the encoder value and do the average
       double avg = 0;
-      for (int i = 0; i < 100; i++) {
-        avg += analogRead(AZM_ENCODER_PIN);
-        delay(1);
-      }
+      for (int i = 0; i < 100; i++) { avg += analogRead(AZM_ENCODER_PIN); delay(1); }
       avg /= 100.0;
       double azmRead = map(avg,103,923, 0,360);
       azmRead = (int((azmRead + (360-200))*100.0)%36000)/100.0;
-      if (azmRead>180) {
-        azmRead -= 360;
-      }
+      if (azmRead>180) azmRead -= 360;
       control.stepperAzm.setCurrentPosition(control.degToStepAzm(azmRead));
       delay(1000);
-      Serial.print("AZM: ");
-      Serial.println(azmRead);
+      Serial.print("AZM: "); Serial.println(azmRead);
     #endif
 
     #ifdef SPECTROBOT
-    // Spectrobot
       bool endstopReached = false;
       do {
-
         control.stepperAzm.setSpeed(control.degToStepAzm(AZM_HOMING_SPEED));
         control.stepperAzm.runSpeed();
         azmEndstop.update();
@@ -552,9 +619,7 @@ void doHoming() {
       Serial.println("AZM Endstop reached");
       control.stepperAzm.setCurrentPosition(control.degToStepAzm(AZM_ENDSTOP_POSITION));
     #endif
-  }
-
-  else {
+  } else {
     delay(1000);
     Serial.println("No AZM limit switch");
     control.stepperAzm.setCurrentPosition(0);
@@ -562,11 +627,9 @@ void doHoming() {
 }
 
 void loopWebserver() {
-  // listen for incoming clients
   EthernetClient client = server.available();
   if (client) {
      Serial.println("new client");
-    // an HTTP request ends with a blank line
     boolean currentLineIsBlank = true;
     String httpRequest = "";
 
@@ -576,66 +639,34 @@ void loopWebserver() {
         Serial.write(c);
         httpRequest += c;
 
-        // if you've gotten to the end of the line (received a newline
-        // character) and the line is blank, the HTTP request has ended,
-        // so you can send a reply
         if (c == '\n' && currentLineIsBlank) {
 
-          // parse the HTTP request to extract form data
           if (httpRequest.indexOf("GET /?") != -1) {
-            // extract parameters from the HTTP request
             int AmaxAccIndex = httpRequest.indexOf("AmaxAcc=");
-            // Serial.println(AmaxAccIndex);
             int AmaxSpeIndex = httpRequest.indexOf("&AmaxSpe=");
-            // Serial.println(AmaxSpeIndex);
             int AstepRevIndex = httpRequest.indexOf("&AstepRev=");
-            // Serial.println(AstepRevIndex);
             int AgearBoxIndex = httpRequest.indexOf("&AgearBox=");
-            // Serial.println(AgearBoxIndex);
             int AlimExistIndex = httpRequest.indexOf("&AlimExist=");
-            // Serial.println(AlimExistIndex);
             int AlimMinIndex = httpRequest.indexOf("&AlimMin=");
-            // Serial.println(AlimMinIndex);
             int AlimMaxIndex= httpRequest.indexOf("&AlimMax=");
-            // Serial.println(AlimMaxIndex);
             int AdirIndex = httpRequest.indexOf("&Adir=");
-            // Serial.println(AdirIndex);
             int AbackIndex = httpRequest.indexOf("&Aback=");
-            // Serial.println(AbackIndex);
-            // elevacion  
             int EmaxAccIndex = httpRequest.indexOf("&EmaxAcc=");
-            // Serial.println(EmaxAccIndex);
             int EmaxSpeIndex = httpRequest.indexOf("&EmaxSpe=");
-            // Serial.println(EmaxSpeIndex);
             int EstepRevIndex = httpRequest.indexOf("&EstepRev=");
-            // Serial.println(EstepRevIndex);
             int EgearBoxIndex = httpRequest.indexOf("&EgearBox=");
-            // Serial.println(EgearBoxIndex);
             int ElimExistIndex = httpRequest.indexOf("&ElimExist=");
-            // Serial.println(ElimExistIndex);
             int ElimMinIndex = httpRequest.indexOf("&ElimMin=");
-            // Serial.println(ElimMinIndex);
             int ElimMaxIndex= httpRequest.indexOf("&ElimMax=");
-            // Serial.println(ElimMaxIndex);
             int EdirIndex = httpRequest.indexOf("&Edir=");
-            // Serial.println(EdirIndex);
             int EbackIndex = httpRequest.indexOf("&Eback=");
-            // Serial.println(EbackIndex);
-            //
-            // int ipIndex = httpRequest.indexOf("&ip=");
             int portIndex = httpRequest.indexOf("&port=");
-            // Serial.println(portIndex);
-            //
             int kpIndex = httpRequest.indexOf("&kp=");
-            // Serial.println(kpIndex);
             int kdIndex = httpRequest.indexOf("&kd=");
-            // Serial.println(kpIndex);
             int freqIndex = httpRequest.indexOf("&freq=");
-            // Serial.println(freqIndex);
             int maxTimeIndex = httpRequest.indexOf("&maxTime=");
-            // Serial.println(maxTimeIndex);
             int modeIndex = httpRequest.indexOf("&mode=");
-            //
+
             if (AmaxAccIndex != -1 
                 && AmaxSpeIndex != -1 
                 && AstepRevIndex != -1 
@@ -654,7 +685,6 @@ void loopWebserver() {
                 && ElimMaxIndex != -1
                 && EdirIndex != -1
                 && EbackIndex != -1
-                // && ipIndex != -1
                 && portIndex !=-1
                 && kpIndex != -1
                 && kdIndex != -1
@@ -662,8 +692,6 @@ void loopWebserver() {
                 && maxTimeIndex != -1
                 && modeIndex != -1
                 ) {
-              // update variables with the values from the form            
-              // Example pour modifier les paramètres
               globalParameter.azmParameter.maxAcc = httpRequest.substring(AmaxAccIndex + 8, AmaxSpeIndex).toFloat();
               globalParameter.azmParameter.maxSpe = httpRequest.substring(AmaxSpeIndex + 9, AstepRevIndex).toFloat();
               globalParameter.azmParameter.stepRev = httpRequest.substring(AstepRevIndex + 10, AgearBoxIndex).toFloat();
@@ -673,7 +701,7 @@ void loopWebserver() {
               globalParameter.azmParameter.limMax = httpRequest.substring(AlimMaxIndex + 9, AdirIndex).toFloat();
               globalParameter.azmParameter.dir = httpRequest.substring(AdirIndex + 6, AbackIndex).toFloat();
               globalParameter.azmParameter.back = httpRequest.substring(AbackIndex + 7, EmaxAccIndex).toFloat();
-              // elevacion
+
               globalParameter.elvParameter.maxAcc = httpRequest.substring(EmaxAccIndex + 9, EmaxSpeIndex).toFloat();
               globalParameter.elvParameter.maxSpe = httpRequest.substring(EmaxSpeIndex + 9, EstepRevIndex).toFloat();
               globalParameter.elvParameter.stepRev = httpRequest.substring(EstepRevIndex + 10, EgearBoxIndex).toFloat();
@@ -683,20 +711,16 @@ void loopWebserver() {
               globalParameter.elvParameter.limMax = httpRequest.substring(ElimMaxIndex + 9, EdirIndex).toFloat();
               globalParameter.elvParameter.dir = httpRequest.substring(EdirIndex + 6, EbackIndex).toFloat();
               globalParameter.elvParameter.back = httpRequest.substring(EbackIndex + 7, portIndex).toFloat();
-              //
-              // globalParameter.ethernetParameter.ip = httpRequest.substring(ipIndex + 4, portIndex).toFloat();
-              globalParameter.ethernetParameter.port = httpRequest.substring(portIndex + 6, kpIndex).toFloat();
-              //
+
+              globalParameter.ethernetParameter.port = httpRequest.substring(portIndex + 6, kpIndex).toInt();
               globalParameter.control.kp = httpRequest.substring(kpIndex + 4, kdIndex).toFloat();
               globalParameter.control.kd = httpRequest.substring(kdIndex + 4, freqIndex).toFloat();
               globalParameter.control.freq = httpRequest.substring(freqIndex + 6, maxTimeIndex).toFloat();
               globalParameter.control.maxTime = httpRequest.substring(maxTimeIndex + 9, modeIndex).toFloat();
-              globalParameter.mode = httpRequest.substring(modeIndex + 6).toInt();
+              globalParameter.mode = static_cast<TRACKING_MODE>(httpRequest.substring(modeIndex + 6).toInt());
               Serial.print("Received config with mode: ");
-              Serial.print(globalParameter.mode);
-              Serial.println();
-              
-              // Save parameters to config file
+              Serial.println(globalParameter.mode);
+
               applyConfig();
               Serial.print("Config applied: ");
               Serial.println(globalParameter.control.maxTime);
@@ -707,42 +731,37 @@ void loopWebserver() {
             }
           }
 
-          // send a standard http response header
           client.println("HTTP/1.1 200 OK");
           client.println("Content-Type: text/html");
           client.println("Connection: close");
           client.println();
-
-          // send the web page
           client.print(readHTML());
           break;
         }
         if (c == '\n') {
-          // you're starting a new line
           currentLineIsBlank = true;
         } else if (c != '\r') {
-          // you've gotten a character on the current line
           currentLineIsBlank = false;
         }
       }
     }
     client.stop();
-    // Serial.println("client disconnected");
   }
 }
 
 void readConfigFile() {
   delay(1000);
   File configFile = SD.open("/config.txt");
-  
   if (configFile) {
     String line = configFile.readStringUntil('\n');
     configFile.close();
 
-    // Parse the line to extract parameter values as parsed in loopWebserver()
-    // The data is coherent with the data in the globalParameter structure.
-    // There are 22 fields in the config.txt file, separated by commas
-    sscanf(line.c_str(), "%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%d", 
+    int modeTmp = 0; // <<< MOD: temporal para el enum
+
+    sscanf(line.c_str(),
+      "%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,"
+      "%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,"
+      "%lf,%lf,%lf,%lf,%lf,%d",
       &globalParameter.azmParameter.maxAcc,
       &globalParameter.azmParameter.maxSpe,
       &globalParameter.azmParameter.stepRev,
@@ -766,58 +785,35 @@ void readConfigFile() {
       &globalParameter.control.kd,
       &globalParameter.control.freq,
       &globalParameter.control.maxTime,
-      &globalParameter.mode
+      &modeTmp // <<< MOD: aquí en lugar de &globalParameter.mode
     );
     Serial.println("Config file read");
     Serial.println(line);
-    Serial.print("MaxAcc:");
-    Serial.println(globalParameter.azmParameter.maxAcc);
-    Serial.print("MaxSpe:");
-    Serial.println(globalParameter.azmParameter.maxSpe);
-    Serial.print("StepRev:");
-    Serial.println(globalParameter.azmParameter.stepRev);
-    Serial.print("GearBox:");
-    Serial.println(globalParameter.azmParameter.gearBox);
-    Serial.print("LimExist:");
-    Serial.println(globalParameter.azmParameter.limExist);
-    Serial.print("LimMin:");
-    Serial.println(globalParameter.azmParameter.limMin);
-    Serial.print("LimMax:");
-    Serial.println(globalParameter.azmParameter.limMax);
-    Serial.print("Dir:");
-    Serial.println(globalParameter.azmParameter.dir);
-    Serial.print("Back:");
-    Serial.println(globalParameter.azmParameter.back);
-    Serial.print("MaxAcc:");
-    Serial.println(globalParameter.elvParameter.maxAcc);
-    Serial.print("MaxSpe:");
-    Serial.println(globalParameter.elvParameter.maxSpe);
-    Serial.print("StepRev:");
-    Serial.println(globalParameter.elvParameter.stepRev);
-    Serial.print("GearBox:");
-    Serial.println(globalParameter.elvParameter.gearBox);
-    Serial.print("LimExist:");
-    Serial.println(globalParameter.elvParameter.limExist);
-    Serial.print("LimMin:");
-    Serial.println(globalParameter.elvParameter.limMin);
-    Serial.print("LimMax:");
-    Serial.println(globalParameter.elvParameter.limMax);
-    Serial.print("Dir:");
-    Serial.println(globalParameter.elvParameter.dir);
-    Serial.print("Back:");
-    Serial.println(globalParameter.elvParameter.back);
-    // Serial.print("IP:");
+    Serial.print("MaxAcc:"); Serial.println(globalParameter.azmParameter.maxAcc);
+    Serial.print("MaxSpe:"); Serial.println(globalParameter.azmParameter.maxSpe);
+    Serial.print("StepRev:"); Serial.println(globalParameter.azmParameter.stepRev);
+    Serial.print("GearBox:"); Serial.println(globalParameter.azmParameter.gearBox);
+    Serial.print("LimExist:"); Serial.println(globalParameter.azmParameter.limExist);
+    Serial.print("LimMin:"); Serial.println(globalParameter.azmParameter.limMin);
+    Serial.print("LimMax:"); Serial.println(globalParameter.azmParameter.limMax);
+    Serial.print("Dir:"); Serial.println(globalParameter.azmParameter.dir);
+    Serial.print("Back:"); Serial.println(globalParameter.azmParameter.back);
+    Serial.print("MaxAcc:"); Serial.println(globalParameter.elvParameter.maxAcc);
+    Serial.print("MaxSpe:"); Serial.println(globalParameter.elvParameter.maxSpe);
+    Serial.print("StepRev:"); Serial.println(globalParameter.elvParameter.stepRev);
+    Serial.print("GearBox:"); Serial.println(globalParameter.elvParameter.gearBox);
+    Serial.print("LimExist:"); Serial.println(globalParameter.elvParameter.limExist);
+    Serial.print("LimMin:"); Serial.println(globalParameter.elvParameter.limMin);
+    Serial.print("LimMax:"); Serial.println(globalParameter.elvParameter.limMax);
+    Serial.print("Dir:"); Serial.println(globalParameter.elvParameter.dir);
+    Serial.print("Back:"); Serial.println(globalParameter.elvParameter.back);
     Serial.println(globalParameter.ethernetParameter.port);
-    Serial.print("Kp:");
-    Serial.println(globalParameter.control.kp);
-    Serial.print("Kd:");
-    Serial.println(globalParameter.control.kd);
-    Serial.print("Freq:");
-    Serial.println(globalParameter.control.freq);
-    Serial.print("MaxTime:");
-    Serial.println(globalParameter.control.maxTime);
-    Serial.print("Mode:");
-    Serial.println(globalParameter.mode);
+    Serial.print("Kp:"); Serial.println(globalParameter.control.kp);
+    Serial.print("Kd:"); Serial.println(globalParameter.control.kd);
+    Serial.print("Freq:"); Serial.println(globalParameter.control.freq);
+    Serial.print("MaxTime:"); Serial.println(globalParameter.control.maxTime);
+    Serial.print("Mode:"); Serial.println(globalParameter.mode);
+    globalParameter.mode = static_cast<TRACKING_MODE>(modeTmp);
   } else {
     Serial.println("Error opening config.txt");
   }
@@ -825,12 +821,9 @@ void readConfigFile() {
 
 void saveConfigFile() {
   File configFile = SD.open("/config.txt", FILE_WRITE);
-
-  // Erase the content of the file
   configFile.truncate(0);
   
   if (configFile) {
-    // Save parameters to config.txt
     configFile.printf("%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%d", 
       globalParameter.azmParameter.maxAcc,
       globalParameter.azmParameter.maxSpe,
@@ -850,7 +843,6 @@ void saveConfigFile() {
       globalParameter.elvParameter.limMax,
       globalParameter.elvParameter.dir,
       globalParameter.elvParameter.back,
-      // globalParameter.ethernetParameter.ip,
       globalParameter.ethernetParameter.port,
       globalParameter.control.kp,
       globalParameter.control.kd,
@@ -859,8 +851,6 @@ void saveConfigFile() {
       globalParameter.mode
     );
     configFile.close();
-  } else {
-    // Serial.println("Error opening config.txt for writing");
   }
 }
 
@@ -887,7 +877,6 @@ void applyConfig() {
   Serial.print("Config applied: ");
 }
 
-
 String readHTML() {
   File htmlFile = SD.open("/index.html");
   String html = "";
@@ -895,7 +884,6 @@ String readHTML() {
   if (htmlFile) {
     while (htmlFile.available()) {
       String line = htmlFile.readStringUntil('\n');
-      // Replace placeholders with actual parameter values
       line.replace("{{AmaxAcc}}", String(globalParameter.azmParameter.maxAcc));
       line.replace("{{AmaxSpe}}", String(globalParameter.azmParameter.maxSpe));
       line.replace("{{AstepRev}}", String(globalParameter.azmParameter.stepRev));
@@ -914,7 +902,6 @@ String readHTML() {
       line.replace("{{ElimMax}}", String(globalParameter.elvParameter.limMax));
       line.replace("{{Edir}}", String(globalParameter.elvParameter.dir));
       line.replace("{{Eback}}", String(globalParameter.elvParameter.back));
-      // line.replace("{{ip}}", String(globalParameter.ethernetParameter.ip));
       line.replace("{{port}}", String(globalParameter.ethernetParameter.port));
       line.replace("{{kp}}", String(globalParameter.control.kp));
       line.replace("{{kd}}", String(globalParameter.control.kd));
@@ -928,7 +915,6 @@ String readHTML() {
     Serial.println("Error opening index.html");
     html = "Error loading HTML file";
   }
-
   return html;
 }
 
@@ -943,10 +929,7 @@ double azimuthTo(double lat1, double lng1, double lat2, double lng2) {
   double a2 = sin(lat1) * cos(lat2) * cos(dlon);
   a2 = cos(lat1) * sin(lat2) - a2;
   a2 = atan2(a1, a2);
-  if (a2 < 0.0)
-  {
-    a2 += 2*PI;
-  }
+  if (a2 < 0.0) a2 += 2*PI;
   return a2/PI*180.0;
 }
 

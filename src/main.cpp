@@ -310,48 +310,56 @@ void loopAutomatic() {
 
   switch(control.getMode()) {
 
-    case TRACKING_MODE::TRACKING_MANUAL:
-      if (millis()-control.lastManualTime<300) {
-        azmManualPosition  = control.lastAngle.azm;
-        elvManualPosition  = control.lastAngle.elv;
+  case TRACKING_MODE::TRACKING_MANUAL: {
+  // Usamos el último ABS recibido recientemente
+    if (millis() - control.lastAngleTime < 500) {
 
-        azmManualPosition = constrain(azmManualPosition, globalParameter.azmParameter.limMin, globalParameter.azmParameter.limMax);
-        elvManualPosition = constrain(elvManualPosition, globalParameter.elvParameter.limMin, globalParameter.elvParameter.limMax);
+    // Objetivos desde ABS, con límites
+    azmManualPosition = constrain(control.lastAngle.azm,
+                                  globalParameter.azmParameter.limMin,
+                                  globalParameter.azmParameter.limMax);
+    elvManualPosition = constrain(control.lastAngle.elv,
+                                  globalParameter.elvParameter.limMin,
+                                  globalParameter.elvParameter.limMax);
 
-        control.stepperAzm.moveTo(azmManualPosition);
-        control.stepperElv.moveTo(elvManualPosition);
+    // Error actual (wrap en Az)
+    const double azNow = control.stepToDegAzm(control.stepperAzm.currentPosition());
+    const double elNow = control.stepToDegElv(control.stepperElv.currentPosition());
+    const double eAz   = fmod(azmManualPosition - azNow + 540.0, 360.0) - 180.0;
+    const double eEl   = (elvManualPosition - elNow);
 
-        // Nota: en manual, AccelStepper reporta velocidad en pasos/s; mantenemos ωcmd a 0 aquí.
-        speedAzm = control.stepperAzm.speed();
-        speedElv = control.stepperElv.speed();
-        // Enviamos ωcmd=0 en este modo (la Pi ya estima ωmeas).
-        speedAzm = 0; 
-        speedElv = 0;
-      }
-    break;
+    // Ganancia desde el config y límites de vel. por eje
+    const double Kp      = globalParameter.control.kp;
+    const double vMaxAz  = globalParameter.azmParameter.maxSpe; // ¡ojo: es maxSpe!
+    const double vMaxEl  = globalParameter.elvParameter.maxSpe;
+
+    // Comando de velocidad (deg/s) limitado
+    speedAzm = constrain(Kp * eAz, -vMaxAz, vMaxAz);
+    speedElv = constrain(Kp * eEl, -vMaxEl, vMaxEl);
+
+    } else {
+    speedAzm = 0;
+    speedElv = 0;
+  }
+} break;
+
+
 
     case TRACKING_MODE::TRACKING_POSITION:
-    {
-      static unsigned long lastEstimationTime = millis();
-      if ((millis()-lastEstimationTime) >= 1000.0/ESTIMATION_RATE) {
-        lastEstimationTime = millis();
-
-        double azmEstimation = azmEstimator.computeAngle(millis());
-        double elvEstimation = elvEstimator.computeAngle(millis());
-
-        double azmFiltered = azmEstimation;
-        double elvFiltered = elvEstimation;
-
-        PacketTrackerCmd newCmd;
-        newCmd.azm = constrain(azmFiltered, globalParameter.azmParameter.limMin, globalParameter.azmParameter.limMax);
-        newCmd.elv = constrain(elvFiltered, globalParameter.elvParameter.limMin, globalParameter.elvParameter.limMax);
-        control.update(newCmd);
-      }
-      controlOutput output = control.computeOutputSpeedPosition();
-      speedAzm = output.azmSpeed;  // deg/s comandados por posición
-      speedElv = output.elvSpeed;
-    }
-    break;
+{
+  PacketTrackerCmd newCmd;
+  newCmd.azm = constrain(control.lastAngle.azm,
+                         globalParameter.azmParameter.limMin,
+                         globalParameter.azmParameter.limMax);
+  newCmd.elv = constrain(control.lastAngle.elv,
+                         globalParameter.elvParameter.limMin,
+                         globalParameter.elvParameter.limMax);
+  control.update(newCmd);
+  controlOutput output = control.computeOutputSpeedPosition();
+  speedAzm = output.azmSpeed;   // deg/s
+  speedElv = output.elvSpeed;   // deg/s
+}
+break;
 
     case TRACKING_MODE::TRACKING_ERROR:
       // MOD: aquí el lazo de la cámara/joystick define ωcmd
@@ -538,13 +546,18 @@ void handleCommand(uint8_t packetId, uint8_t *dataIn, uint32_t len) {
       elvFilter.setCutoffFreq(globalParameter.control.freq);
     } break;
 
-    case 0x03:
-      control.lastAngleTime = millis();
-      memcpy(&control.lastAngle, dataIn, sizeof(AnglePacket));
-      Serial.println("Received ABS Packet!!");
-      azmManualPosition = control.lastAngle.azm;
-      elvManualPosition = control.lastAngle.elv;
-    break;
+  case 0x03:
+  control.lastAngleTime = millis();
+  memcpy(&control.lastAngle, dataIn, sizeof(AnglePacket));
+  Serial.println("Received ABS Packet!!");
+  azmManualPosition = control.lastAngle.azm;
+  elvManualPosition = control.lastAngle.elv;
+
+  control.lastManualTime = millis();   // <<< NUEVO: habilita MANUAL con ABS
+break;
+
+
+
 
     case 99:
       control.lastManualTime = millis();
